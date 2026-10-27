@@ -1,0 +1,33 @@
+{
+  "name": "hallucination-visualizer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "See which parts of an AI answer are real and which parts may be made up.",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "concurrently --kill-others --names api,web --prefix-colors cyan,magenta \"npm run dev --workspace server\" \"npm run dev --workspace client\"",
+    "build": "npm run build --workspace client",
+    "start": "npm run start --workspace server",
+    "test": "node --test server/test/*.test.js",
+    "verify:connections": "node server/scripts/verify-connections.js",
+    "test:browser": "node scripts/browser-check.mjs",
+    "test:documents": "node scripts/document-check.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.1",
+    "concurrently": "^9.2.1",
+    "prettier": "^3.9.10",
+    "rollup": "npm:@rollup/wasm-node@^4.65.1",
+    "supertest": "^7.1.4"
+  },
+  "overrides": {
+    "rollup": "$rollup"
+  }
+}
