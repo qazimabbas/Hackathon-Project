@@ -4,6 +4,8 @@ See which parts of an AI answer are real and which parts may be made up.
 
 A complete JavaScript MERN app with React, Vite, Express, Mongoose, MongoDB Atlas, Gemini, Wikipedia, optional Tavily, and Server-Sent Events. No Python services.
 
+**Live app:** [hallucination-visualizer.vercel.app](https://hallucination-visualizer.vercel.app). The frontend and backend are both hosted on Vercel.
+
 ## Run locally
 
 Requires Node.js 22.12 or newer and npm. Dependencies and private settings are already configured on this computer.
@@ -136,7 +138,7 @@ Run `npm run build`, set `NODE_ENV=production` in the server environment or root
 
 Rollup uses its official `@rollup/wasm-node` package through an npm alias and override. Windows Application Control blocked its native module on this computer; no OS policy was changed. The lockfile preserves the working setup.
 
-This is a local, single-workspace app. History and stats belong to its configured database. If Atlas becomes unavailable, analysis may still finish but the page warns that saving failed; history/stats show retryable errors. Active jobs are in process memory. Saved completed checks survive restarts; restarting can interrupt an active check.
+Local development uses a single workspace, with history and statistics from its configured database and active jobs in process memory. Saved completed checks survive restarts; restarting can interrupt an active local check. The Vercel deployment instead stores active job snapshots in Atlas and isolates each browser's private history. Hosted checks require initial progress storage to succeed before paid provider work begins. Later save failures produce a clear warning; history and statistics show retryable database errors.
 
 ## API
 
