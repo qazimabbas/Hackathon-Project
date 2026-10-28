@@ -7,6 +7,8 @@ import {
   questionPrompt,
   repeatInstruction,
   repeatPrompt,
+  documentRepeatInstruction,
+  documentRepeatPrompt,
   agreementInstruction,
   agreementPrompt,
 } from './prompts.js';
@@ -73,13 +75,22 @@ export async function inferQuestion(answerText, provider = llm) {
   return parsed.data.question;
 }
 
-export async function repeatCheck(question, claims, provider = llm) {
+export async function repeatCheck(
+  question,
+  claims,
+  provider = llm,
+  { documentText = '', basis: sourceBasis = 'document' } = {},
+) {
   if (!claims.length) return { results: {}, answers: [] };
+  const basis = documentText.trim() ? sourceBasis : 'question';
   const answers = await mapConcurrent([0, 1, 2, 3, 4], 2, async () => {
     try {
       const result = await provider.generateJson({
-        system: repeatInstruction,
-        prompt: repeatPrompt(question),
+        system: basis !== 'question' ? documentRepeatInstruction : repeatInstruction,
+        prompt:
+          basis !== 'question'
+            ? documentRepeatPrompt(question, documentText)
+            : repeatPrompt(question),
         schema: textSchema('answer'),
         model: config.GEMINI_REPEAT_MODEL,
         temperature: 0.9,
@@ -98,7 +109,7 @@ export async function repeatCheck(question, claims, provider = llm) {
       results: Object.fromEntries(
         claims.map((claim) => [
           claim.id,
-          { matches: [null, null, null, null, null], hits: 0, completed: 0 },
+          { matches: [null, null, null, null, null], hits: 0, completed: 0, basis },
         ]),
       ),
     };
@@ -131,20 +142,10 @@ export async function repeatCheck(question, claims, provider = llm) {
             matches,
             hits: matches.filter((hit) => hit === true).length,
             completed: matches.filter((hit) => hit !== null).length,
+            basis,
           },
         ];
       }),
     ),
   };
-}
-
-export function combineTrust(sourceResult, repeatResult) {
-  if (sourceResult?.verdict === 'contradicted') return 'Low';
-  if (sourceResult?.verdict === 'supported')
-    return repeatResult && repeatResult.completed >= 3 && repeatResult.hits >= 3
-      ? 'High'
-      : 'Medium';
-  // Repeated assertions never establish truth without evidence.
-  if (!repeatResult || repeatResult.completed < 3) return 'Medium';
-  return repeatResult.hits >= 3 ? 'Medium' : 'Low';
 }

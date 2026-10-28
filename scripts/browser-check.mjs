@@ -37,8 +37,12 @@ try {
     await page.locator('.original-answer mark.selected').textContent(),
     'The crew stayed on the Moon for an entire week.',
   );
-  await page.getByRole('tab', { name: 'Agreement view' }).click();
+  await page.getByRole('tab', { name: 'Gemini agreement' }).click();
   assert.equal(await page.locator('.agreement-list > button').count(), 5);
+  assert.match(
+    await page.locator('#agreement-panel > p').textContent(),
+    /agreement does not raise or lower/,
+  );
   await page.getByRole('tab', { name: 'Highlight view' }).click();
   await page.screenshot({ path: '.local/example.png', fullPage: true });
 
@@ -52,6 +56,11 @@ try {
 
   await page.getByRole('button', { name: 'How it works' }).click();
   await page.getByRole('dialog').waitFor();
+  assert.match(await page.getByRole('dialog').textContent(), /It does not change the trust label/);
+  assert.match(
+    await page.getByRole('dialog').textContent(),
+    /Medium trust means the evidence is insufficient or uncertain/,
+  );
   await page.keyboard.press('Escape');
   assert.equal(await page.getByRole('dialog').count(), 0);
 
@@ -77,6 +86,7 @@ try {
           id: 'browser-test',
           status: 'complete',
           mode: 'live',
+          trustPolicy: 'evidence-only-v1',
           answerText: 'The Moon orbits Earth.',
           claims: [
             {
@@ -84,7 +94,21 @@ try {
               claimText: 'The Moon orbits Earth.',
               startIndex: 0,
               endIndex: 22,
-              trustLevel: null,
+              status: 'complete',
+              trustLevel: 'High',
+              reasonText: 'Supported by a public source.',
+              sourceResult: {
+                verdict: 'supported',
+                sourceKind: 'wikipedia',
+                evidenceSnippet: 'The Moon orbits Earth.',
+                sourceTitle: 'Moon',
+              },
+              repeatResult: {
+                hits: 0,
+                completed: 5,
+                matches: [false, false, false, false, false],
+                basis: 'question',
+              },
             },
           ],
         },
@@ -94,6 +118,16 @@ try {
   await page.getByRole('button', { name: 'Check answer', exact: true }).click();
   await page.getByText('Statements found', { exact: true }).waitFor();
   assert.equal(await page.locator('.claim-list > li').count(), 1);
+  assert.match(await page.locator('.evidence-detail .trust-badge').textContent(), /High trust/);
+  assert.match(
+    await page.locator('.repeat-detail').textContent(),
+    /Gemini answer agreement: 0 of 5/,
+  );
+  assert.match(
+    await page.locator('.repeat-detail').textContent(),
+    /They do not change the trust label/,
+  );
+  assert.equal(await page.getByText(/This saved check uses an earlier trust policy/).count(), 0);
   await page.unroute('**/api/checks');
 
   for (const width of [390, 320]) {
@@ -103,7 +137,13 @@ try {
     assert.equal(overflow, false, `No horizontal overflow at ${width}px`);
     if (width === 390) await page.screenshot({ path: '.local/mobile.png', fullPage: true });
   }
-  const savedCheck = { ...example, id: 'saved-browser-check', mode: 'live', saved: true };
+  const savedCheck = {
+    ...example,
+    id: 'saved-browser-check',
+    mode: 'live',
+    saved: true,
+    trustPolicy: undefined,
+  };
   await page.route('**/api/checks?page=*', (route) =>
     route.fulfill({
       contentType: 'application/json',
@@ -143,6 +183,7 @@ try {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   await page.locator('.history-card').first().click();
   await page.getByRole('button', { name: 'Share result', exact: true }).waitFor();
+  await page.getByText(/This saved check uses an earlier trust policy/).waitFor();
   assert.equal(await page.locator('#answer').inputValue(), example.answerText);
   await page.getByRole('button', { name: 'Share result', exact: true }).click();
   await page.locator('.share-message').waitFor();

@@ -172,9 +172,88 @@ try {
     if (width === 390)
       await page.screenshot({ path: '.local/source-document-mobile.png', fullPage: true });
   }
+  await page.unroute('**/api/checks');
+  // The result UI must explain derived support and abstention without inventing source quotes.
+  let sourceResult;
+  await page.route('**/api/checks', (route) => {
+    const input = route.request().postDataJSON();
+    return route.fulfill({
+      json: {
+        id: 'reasoning-ui',
+        check: {
+          ...input,
+          id: 'reasoning-ui',
+          status: 'complete',
+          mode: 'live',
+          warnings: [],
+          claims: [
+            {
+              id: 'derived',
+              claimText: input.answerText,
+              startIndex: 0,
+              endIndex: input.answerText.length,
+              status: 'complete',
+              trustLevel: 'High',
+              reasonText: sourceResult.reason,
+              sourceResult,
+              repeatResult: {
+                matches: [true, true, true, true, true],
+                hits: 5,
+                completed: 5,
+                basis: 'document',
+              },
+            },
+          ],
+        },
+      },
+    });
+  });
+  sourceResult = {
+    verdict: 'supported',
+    assessmentType: 'calculation',
+    sourceKind: 'document',
+    reason: 'Revenue increased from 200 to 250, so growth is 25%.',
+    evidenceSnippet: 'Revenue was 200.',
+    sourceTitle: 'Your document',
+    citations: [{ exactQuote: 'Revenue was 200.' }, { exactQuote: 'Revenue is now 250.' }],
+    calculation: {
+      verified: true,
+      displayExpression: '(250 - 200) / 200 * 100',
+      computedValue: 25,
+      claimedValue: 25,
+      precision: 0,
+    },
+  };
+  await page.locator('#answer').fill('Revenue grew by 25%.');
+  await page.getByRole('button', { name: 'Check answer', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Calculation verified from source facts' }),
+  ).toBeVisible();
+  await expect(page.locator('.calculation-detail')).toContainText('(250 - 200) / 200 * 100 = 25');
+  await expect(page.locator('.reasoning-evidence')).toContainText('Revenue is now 250.');
+  await expect(page.locator('.repeat-detail')).toContainText('document-based');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  sourceResult = {
+    verdict: 'supported',
+    assessmentType: 'abstention',
+    reviewScope: 'full_document',
+    sourceKind: 'document',
+    sourceTitle: 'Your document',
+    evidenceSnippet: '',
+    citations: [],
+    reason: 'Costs are missing, so profit cannot be calculated.',
+  };
+  await page.locator('#answer').fill('I cannot calculate profit from this document.');
+  await page.getByRole('button', { name: 'Check answer', exact: true }).click();
+  await expect(
+    page.getByRole('heading', { name: 'Appropriate uncertainty for this document' }),
+  ).toBeVisible();
+  await expect(page.locator('.evidence-columns')).toContainText('reviewed the complete document');
+  await expect(page.locator('.evidence-columns')).not.toContainText('No matching passage');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
   assert.deepEqual(errors, []);
   console.log(
-    'Document checks passed: TXT, MD, PDF, DOCX, invalid/empty/oversized files, preserved source text, request payload, reset, and mobile layouts.',
+    'Document checks passed: file imports, invalid/empty/oversized files, preserved text, request payload, reset, mobile, calculation evidence, and appropriate abstention.',
   );
 } finally {
   await browser.close();

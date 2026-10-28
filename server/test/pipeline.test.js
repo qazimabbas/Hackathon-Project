@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createPipeline } from '../src/pipeline.js';
 import { locateClaims } from '../src/claims.js';
 
-test('streams progressive results, isolates a failed claim, and combines five repeats', async () => {
+test('streams progressive evidence ratings, isolates a failed claim, and preserves Gemini agreement', async () => {
   const events = [];
   const pipeline = createPipeline({
     extractor: async (input) =>
@@ -48,6 +48,117 @@ test('streams progressive results, isolates a failed claim, and combines five re
   assert.equal(final.claims[1].status, 'error');
   assert.equal(final.overallSummary.errors, 1);
   assert.ok(!JSON.stringify(final).includes('Failed provider'));
+});
+
+test('all source modes classify from evidence alone across disagreement, agreement and repeat failure', async () => {
+  const answerText = 'A supported fact. A contradicted fact. An unresolved fact.';
+  const expected = ['High', 'Low', 'Medium'];
+  for (const mode of ['public', 'document', 'link']) {
+    for (const hits of [0, 1, 5, null]) {
+      const pipeline = createPipeline({
+        extractor: async () =>
+          locateClaims(answerText, {
+            claims: answerText.match(/[^.]+\./g).map((text) => ({ exactQuote: text.trim() })),
+          }),
+        loadSource: async () => ({
+          text: 'A reference.',
+          kind: 'link',
+          url: 'https://example.com/article',
+        }),
+        search: async () => ({ sources: [], warnings: [] }),
+        judge: async (claim) => ({
+          verdict: claim.includes('supported')
+            ? 'supported'
+            : claim.includes('contradicted')
+              ? 'contradicted'
+              : 'not_enough',
+          sourceKind: mode === 'public' ? 'wikipedia' : mode,
+          reason: 'Evidence assessment.',
+        }),
+        repeat: async (_question, claims) => {
+          if (hits === null) throw new Error('Agreement service unavailable');
+          return {
+            results: Object.fromEntries(
+              claims.map((claim) => [
+                claim.id,
+                {
+                  hits,
+                  completed: 5,
+                  matches: Array.from({ length: 5 }, (_, index) => index < hits),
+                },
+              ]),
+            ),
+          };
+        },
+      });
+      const job = await pipeline.start({
+        answerText,
+        question: 'What are the facts?',
+        documentText: mode === 'document' ? 'A reference.' : '',
+        sourceUrl: mode === 'link' ? 'https://example.com/article' : '',
+      });
+      const final = await new Promise((resolve) => {
+        const stop = pipeline.subscribe(job.id, (snapshot) => {
+          if (snapshot.status === 'complete') {
+            stop();
+            resolve(snapshot);
+          }
+        });
+      });
+      assert.deepEqual(
+        final.claims.map((claim) => claim.trustLevel),
+        expected,
+        `${mode}: ${hits} matches`,
+      );
+      assert.equal(final.trustPolicy, 'evidence-only-v1');
+      assert.equal(final.claims[0].repeatResult.hits, hits ?? 0);
+      assert.equal(final.claims[0].repeatResult.completed, hits === null ? 0 : 5);
+    }
+  }
+});
+
+test('evidence ratings stream before supplementary Gemini answers finish', async () => {
+  let finishAgreement;
+  const agreementGate = new Promise((resolve) => {
+    finishAgreement = resolve;
+  });
+  const pipeline = createPipeline({
+    extractor: async (input) =>
+      locateClaims(input.answerText, { claims: [{ exactQuote: input.answerText }] }),
+    search: async () => ({ sources: [], warnings: [] }),
+    judge: async () => ({ verdict: 'supported', sourceKind: 'wikipedia', reason: 'Supported.' }),
+    repeat: async () => {
+      await agreementGate;
+      return { results: {} };
+    },
+  });
+  const job = await pipeline.start({
+    answerText: 'A supported fact.',
+    question: 'A question?',
+    documentText: '',
+  });
+  await new Promise((resolve) => {
+    const stop = pipeline.subscribe(job.id, (snapshot) => {
+      if (snapshot.claims[0]?.trustLevel === 'High') {
+        stop();
+        assert.equal(snapshot.status, 'checking');
+        assert.equal(snapshot.claims[0].repeatResult, undefined);
+        resolve();
+      }
+    });
+  });
+  const completed = new Promise((resolve) => {
+    const stop = pipeline.subscribe(job.id, (snapshot) => {
+      if (snapshot.status === 'complete') {
+        stop();
+        resolve(snapshot);
+      }
+    });
+  });
+  finishAgreement();
+  const final = await completed;
+  assert.equal(final.claims[0].trustLevel, 'High');
+  assert.equal(final.claims[0].repeatResult.completed, 0);
 });
 
 test('marks inferred questions and keeps a clear warning', async () => {

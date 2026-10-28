@@ -1,6 +1,54 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { config, hasSecret } from './config.js';
 import { AppError } from './errors.js';
+import { BlockList, isIP } from 'node:net';
+
+const privateNetworks = new BlockList();
+for (const [network, prefix] of [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.168.0.0', 16],
+  ['192.0.0.0', 24],
+  ['198.18.0.0', 15],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+])
+  privateNetworks.addSubnet(network, prefix, 'ipv4');
+for (const [network, prefix] of [
+  ['::', 128],
+  ['::1', 128],
+  ['fc00::', 7],
+  ['fe80::', 10],
+  ['ff00::', 8],
+  ['::ffff:0:0', 96],
+])
+  privateNetworks.addSubnet(network, prefix, 'ipv6');
+
+export function publicSourceUrl(value) {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (
+      !['http:', 'https:'].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      (!hostname.includes('.') && !isIP(hostname)) ||
+      /(^|\.)(localhost|local|internal|test|invalid)$/.test(hostname)
+    )
+      return null;
+    const family = isIP(hostname);
+    if (family && privateNetworks.check(hostname, family === 4 ? 'ipv4' : 'ipv6')) return null;
+    if (url.port && !['80', '443'].includes(url.port)) return null;
+    url.hash = '';
+    return url.href;
+  } catch {
+    return null;
+  }
+}
 
 const userAgent = 'HallucinationVisualizer/1.0 (local evidence reader)';
 export function safeSourceUrl(value) {
@@ -12,10 +60,10 @@ export function safeSourceUrl(value) {
   }
 }
 
-async function fetchJson(url, options, fetchImpl, sleep) {
+async function fetchJson(url, options, fetchImpl, sleep, timeoutMs = 12000) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const response = await fetchImpl(url, { ...options, signal: AbortSignal.timeout(12000) });
+      const response = await fetchImpl(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
       if (!response.ok) {
         await response.body?.cancel();
         if ([429, 500, 502, 503, 504].includes(response.status) && attempt < 2) {
@@ -42,6 +90,72 @@ async function fetchJson(url, options, fetchImpl, sleep) {
       );
     }
   }
+}
+
+export async function extractLinkedSource(
+  sourceUrl,
+  {
+    fetchImpl = fetch,
+    sleep = delay,
+    key = config.TAVILY_API_KEY,
+    limit = config.MAX_DOCUMENT_CHARS,
+  } = {},
+) {
+  const requestedUrl = publicSourceUrl(sourceUrl);
+  if (!requestedUrl)
+    throw new AppError(
+      'Use a public http:// or https:// article, website, or readable book URL.',
+      400,
+      'INVALID_SOURCE_URL',
+    );
+  if (!hasSecret(key))
+    throw new AppError(
+      'Add TAVILY_API_KEY on the server to read source links. Document import and pasted text still work.',
+      503,
+      'SOURCE_KEY_MISSING',
+    );
+  const body = await fetchJson(
+    'https://api.tavily.com/extract',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` },
+      body: JSON.stringify({
+        urls: [requestedUrl],
+        extract_depth: 'advanced',
+        format: 'text',
+        include_images: false,
+        timeout: 20,
+      }),
+    },
+    fetchImpl,
+    sleep,
+    30000,
+  );
+  const result = body.results?.find(
+    (item) =>
+      typeof item.raw_content === 'string' && item.raw_content.trim() && publicSourceUrl(item.url),
+  );
+  if (!result)
+    throw new AppError(
+      'This source could not be read. It may require a login, block access, or expose only a book preview. Upload the document or paste the relevant text instead.',
+      422,
+      'SOURCE_UNREADABLE',
+    );
+  const text = result.raw_content.trim();
+  if (text.length > limit)
+    throw new AppError(
+      `This linked page exceeds the ${limit.toLocaleString()} character source limit. Paste the relevant chapter or passages, or use a shorter source link.`,
+      422,
+      'SOURCE_TOO_LONG',
+    );
+  return {
+    id: 'linked-source',
+    title: String(result.title || new URL(result.url).hostname).slice(0, 200),
+    text,
+    kind: 'link',
+    url: publicSourceUrl(result.url),
+    requestedUrl,
+  };
 }
 
 export async function wikipediaSources(claimText, { fetchImpl = fetch, sleep = delay } = {}) {

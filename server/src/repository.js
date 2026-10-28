@@ -8,6 +8,8 @@ const claimSchema = new mongoose.Schema(
   {
     id: String,
     claimText: String,
+    verificationText: String,
+    kind: { type: String, enum: ['factual', 'abstention'], default: 'factual' },
     startIndex: Number,
     endIndex: Number,
     status: String,
@@ -17,6 +19,7 @@ const claimSchema = new mongoose.Schema(
     repeatResult: mongoose.Schema.Types.Mixed,
     repeatHits: Number,
     warnings: [String],
+    verificationError: mongoose.Schema.Types.Mixed,
   },
   { _id: false },
 );
@@ -26,10 +29,13 @@ const checkSchema = new mongoose.Schema({
   answerText: { type: String, required: true },
   question: String,
   documentText: String,
+  sourceUrl: String,
+  linkedSource: mongoose.Schema.Types.Mixed,
   createdAt: { type: Date, required: true, index: true },
   completedAt: Date,
   status: { type: String, enum: ['complete'], required: true },
   mode: String,
+  trustPolicy: String,
   claims: [claimSchema],
   overallSummary: {
     total: Number,
@@ -52,14 +58,16 @@ export function cacheKey(input) {
         answer: input.answerText,
         question: input.question || '',
         source: input.documentText || '',
+        sourceUrl: input.sourceUrl || '',
         models: [
           config.GEMINI_EXTRACT_MODEL,
           config.GEMINI_JUDGE_MODEL,
+          config.GEMINI_JUDGE_FALLBACK_MODEL || config.GEMINI_REPEAT_MODEL,
           config.GEMINI_REPEAT_MODEL,
         ],
         web: hasSecret(config.TAVILY_API_KEY),
         claims: config.MAX_CLAIMS,
-        version: 1,
+        version: 4,
       }),
     )
     .digest('hex');
@@ -200,7 +208,7 @@ export function createRepository({ modelProvider } = {}) {
       if (!/^[a-f0-9]{48}$/.test(token)) return null;
       const Check = await model();
       const check = await Check.findOne({ shareToken: token })
-        .select(`${projection} -documentText`)
+        .select(`${projection} -documentText -linkedSource.text`)
         .lean();
       return check ? { ...check, readOnly: true } : null;
     }),

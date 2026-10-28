@@ -581,6 +581,76 @@ input:focus {
   border-top: 1px solid var(--line);
   padding-top: 20px;
 }
+.source-choice {
+  margin: 22px 0 0;
+  padding: 18px 0 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  min-width: 0;
+}
+.source-choice legend {
+  font-size: 13px;
+  font-weight: 600;
+  padding: 0 8px 0 0;
+}
+.source-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.source-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.source-options label:has(input:checked) {
+  border-color: var(--green);
+  background: var(--surface-soft);
+  color: var(--green);
+}
+.source-options input {
+  accent-color: var(--green);
+  width: auto;
+  margin: 0;
+  padding: 0;
+}
+.source-choice:disabled label {
+  cursor: default;
+  opacity: 0.65;
+}
+.source-url-field {
+  margin-top: 23px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.source-url-field .context-note {
+  margin-top: 10px;
+}
+.linked-source-notice a {
+  color: var(--green);
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+.contextual-claim {
+  color: var(--muted);
+  line-height: 1.7;
+  font-size: 12px;
+}
+.trust-badge[data-level='unverified'],
+.original-answer mark[data-level='unverified'],
+.trust-map > [data-level='unverified'] {
+  background: var(--line);
+  color: var(--muted);
+  animation: none;
+}
+.donut circle[data-level='unverified'] {
+  stroke: var(--faint);
+}
 .source-heading-row,
 .source-heading-row > div,
 .source-import-row,
@@ -668,6 +738,30 @@ input:focus {
 }
 .source-footer > button:hover:not(:disabled) {
   color: var(--green);
+}
+.reasoning-evidence,
+.calculation-detail {
+  margin-top: 20px;
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+.reasoning-evidence blockquote {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  background: var(--surface-soft);
+  border-left: 2px solid var(--green);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.calculation-detail p {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.calculation-detail code {
+  color: var(--text);
 }
 .source-import-error {
   border-left: 2px solid #b55f45;

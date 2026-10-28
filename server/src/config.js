@@ -14,6 +14,7 @@ const schema = z.object({
     .regex(/^[a-zA-Z0-9._-]+$/)
     .default('gemini-3.5-flash-lite'),
   GEMINI_JUDGE_MODEL: z.string().default('gemini-3.6-flash'),
+  GEMINI_JUDGE_FALLBACK_MODEL: z.string().default(''),
   GEMINI_REPEAT_MODEL: z.string().default('gemini-3.5-flash-lite'),
   MONGODB_URI: z.string().default(''),
   MONGODB_DNS_SERVERS: z.string().default(''),

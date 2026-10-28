@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { extractClaims } from './claims.js';
-import { documentSources, judgeEvidence } from './evidence.js';
-import { searchEvidence } from './sources.js';
-import { repeatCheck, inferQuestion, combineTrust } from './repeat.js';
+import { documentSources, judgeEvidence, sourceTrust } from './evidence.js';
+import { searchEvidence, extractLinkedSource } from './sources.js';
+import { repeatCheck, inferQuestion } from './repeat.js';
 import { mapConcurrent } from './concurrency.js';
 import { config } from './config.js';
 import { AppError } from './errors.js';
@@ -11,7 +11,7 @@ export function summarize(claims) {
   const summary = { total: claims.length, High: 0, Medium: 0, Low: 0, pending: 0, errors: 0 };
   for (const claim of claims) {
     if (claim.trustLevel) summary[claim.trustLevel]++;
-    else summary.pending++;
+    else if (claim.status !== 'error') summary.pending++;
     if (claim.status === 'error') summary.errors++;
   }
   return summary;
@@ -21,6 +21,7 @@ export function createPipeline({
   extractor = extractClaims,
   judge = judgeEvidence,
   search = searchEvidence,
+  loadSource = extractLinkedSource,
   repeat = repeatCheck,
   infer = inferQuestion,
   checkSources = true,
@@ -37,6 +38,20 @@ export function createPipeline({
   }
   async function run(job) {
     try {
+      if (job.sourceUrl && checkSources) {
+        job.status = 'loading_source';
+        emit(job);
+        job.linkedSource = await loadSource(job.sourceUrl);
+        emit(job);
+      }
+      const referenceText = [job.documentText, job.linkedSource?.text]
+        .filter((text) => text?.trim())
+        .join('\n\n');
+      const referenceKind = job.sourceUrl
+        ? job.documentText.trim()
+          ? 'reference'
+          : 'link'
+        : 'document';
       job.status = 'extracting';
       emit(job);
       const claims = await extractor(job);
@@ -63,48 +78,93 @@ export function createPipeline({
         // One set of five answers is shared across all claims, keeping costs bounded.
         const repeated =
           checkSources && questionUsed
-            ? repeat(questionUsed, claims).catch(() => ({ results: {}, answers: [] }))
+            ? repeat(questionUsed, claims, undefined, {
+                documentText: referenceText,
+                basis: job.sourceUrl ? 'source' : 'document',
+              }).catch(() => ({ results: {}, answers: [] }))
             : Promise.resolve({ results: {}, answers: [] });
         await mapConcurrent(claims, config.CLAIM_CONCURRENCY, async (claim, index) => {
           let sourceResult = null,
             sourceError = false,
+            verificationError = null,
             warnings = [];
           if (checkSources) {
             try {
-              const found = job.documentText.trim()
-                ? { sources: documentSources(job.documentText, claim.claimText), warnings: [] }
-                : await search(claim.claimText);
+              const verificationText = claim.verificationText || claim.claimText;
+              const query = `${job.question} ${verificationText}`;
+              const found = referenceText.trim()
+                ? {
+                    sources: [
+                      ...(job.documentText.trim() ? documentSources(job.documentText, query) : []),
+                      ...(job.linkedSource
+                        ? documentSources(job.linkedSource.text, query).map((source) => ({
+                            ...source,
+                            id: `link-${source.id}`,
+                            kind: 'link',
+                            title: job.linkedSource.title,
+                            url: job.linkedSource.url,
+                          }))
+                        : []),
+                    ],
+                    warnings: [],
+                  }
+                : await search(query);
               warnings = found.warnings;
-              sourceResult = await judge(claim.claimText, found.sources);
-            } catch {
+              sourceResult = await judge(verificationText, found.sources, undefined, {
+                question: job.question,
+                documentText: referenceText,
+                claimKind: claim.kind,
+                originalText: claim.claimText,
+                answerText: job.answerText,
+                sourceKind: referenceKind,
+                sourceUrl: job.linkedSource?.url,
+              });
+              warnings.push(...(sourceResult.warnings || []));
+            } catch (error) {
               sourceError = true;
-              warnings.push('The evidence check could not finish for this statement.');
+              verificationError = {
+                code: error instanceof AppError ? error.code : 'EVIDENCE_UNAVAILABLE',
+                message:
+                  error instanceof AppError
+                    ? error.message
+                    : 'The evidence service could not finish this check. Try checking again.',
+              };
+              warnings.push(
+                `${verificationError.message} Fresh-answer agreement alone cannot verify the statement.`,
+              );
             }
           }
-          const { results } = await repeated;
-          const repeatResult = results[claim.id] || {
-            matches: [null, null, null, null, null],
-            hits: 0,
-            completed: 0,
-          };
-          if (repeatResult.completed < 5)
-            warnings.push(`${5 - repeatResult.completed} repeated answers could not be checked.`);
           job.claims[index] = {
             ...claim,
             status: sourceError ? 'error' : 'complete',
             sourceResult,
-            repeatResult,
-            repeatHits: repeatResult.hits,
-            trustLevel: checkSources ? combineTrust(sourceResult, repeatResult) : null,
+            verificationError,
+            trustLevel: checkSources && !sourceError ? sourceTrust(sourceResult?.verdict) : null,
             reasonText:
               sourceResult?.reason ||
               (sourceError
-                ? 'The evidence check could not finish. This statement needs a closer look.'
+                ? `${verificationError.message} This is an unavailable evidence check, not a judgment against the wording.`
                 : 'No proof found.'),
             warnings,
           };
           emit(job);
         });
+        // Publish evidence ratings before waiting for supplementary Gemini agreement.
+        const { results } = await repeated;
+        for (const claim of job.claims) {
+          claim.repeatResult = results[claim.id] || {
+            matches: [null, null, null, null, null],
+            hits: 0,
+            completed: 0,
+            basis: job.sourceUrl ? 'source' : job.documentText.trim() ? 'document' : 'question',
+          };
+          claim.repeatHits = claim.repeatResult.hits;
+          if (claim.repeatResult.completed < 5)
+            claim.warnings.push(
+              `${5 - claim.repeatResult.completed} Gemini answers were unavailable or did not address this statement well enough to compare. This does not change the evidence-based trust label.`,
+            );
+        }
+        emit(job);
       }
       job.status = 'complete';
       job.completedAt = new Date().toISOString();
@@ -134,14 +194,22 @@ export function createPipeline({
     }
   }
   async function start(input) {
-    const cached = await findCached(input);
+    if (input.documentText?.trim() && input.sourceUrl?.trim())
+      throw new AppError(
+        'Choose either a source document or a source link for each check.',
+        400,
+        'SOURCE_CONFLICT',
+      );
+    // Linked pages can change independently of their URL. Always read them afresh.
+    const cached = input.sourceUrl ? null : await findCached(input);
     if (cached) return { ...cached, cached: true };
     const inProgress = [...jobs.values()].find(
       (job) =>
         !['complete', 'failed'].includes(job.status) &&
         job.answerText === input.answerText &&
         job.question === input.question &&
-        job.documentText === input.documentText,
+        job.documentText === input.documentText &&
+        job.sourceUrl === (input.sourceUrl || ''),
     );
     if (inProgress) return snapshot(inProgress);
     if (active >= 2)
@@ -160,7 +228,9 @@ export function createPipeline({
     const job = {
       id: randomUUID(),
       ...input,
+      sourceUrl: input.sourceUrl || '',
       mode: 'live',
+      trustPolicy: 'evidence-only-v1',
       createdAt: new Date().toISOString(),
       status: 'queued',
       claims: [],

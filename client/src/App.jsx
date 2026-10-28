@@ -8,6 +8,7 @@ import {
   CircleHelp,
   FileText,
   Layers3,
+  Link2,
   LoaderCircle,
   Moon,
   RotateCcw,
@@ -80,13 +81,20 @@ function ReadingGuide({ onClose }) {
         </p>
         <p>
           The app finds up to 10 factual statements. Add a source document by pasting text or
-          choosing a PDF, Word, or text file. Without a document, the app searches public sources.
-          Select a highlighted passage to read its evidence.
+          choosing a PDF, Word, or text file, or choose a source link instead. Use one source type
+          per check. Without either, the app searches public sources. Select a highlighted passage
+          to read its evidence.
         </p>
         <p>
-          High trust combines source support with agreement across repeated answers. Medium trust
-          needs a closer look. Low trust can mean contradicting evidence or weak agreement without
-          source support. Sources and this tool can make mistakes.
+          High trust means the available source supports the statement, its reasoning, a verified
+          calculation, or an appropriate response that the supplied source lacks enough information.
+          Low trust means the evidence contradicts it. Medium trust means the evidence is
+          insufficient or uncertain. These rules apply to documents, links, and public sources.
+        </p>
+        <p>
+          Gemini answer agreement shows how often five fresh Gemini answers agree with each
+          statement. It does not change the trust label or measure the original AI model’s
+          consistency. Gemini can repeat the same mistake or miss a correct answer.
         </p>
         <div className="honesty-note">
           <ShieldCheck size={18} />
@@ -136,7 +144,11 @@ function StatementList({ result, selectedId, onSelect, loading, resultsRef }) {
               {result.mode === 'example' ? 'Saved example' : 'Statements found'}
             </span>
             <span>
-              {result.documentText ? 'Compared with your document' : 'No document provided'}
+              {result.sourceUrl
+                ? 'Compared with your linked source'
+                : result.documentText
+                  ? 'Compared with your document'
+                  : 'Public-source check'}
             </span>
           </div>
           {result.claims.length ? (
@@ -151,7 +163,7 @@ function StatementList({ result, selectedId, onSelect, loading, resultsRef }) {
                     <span className="claim-number">{String(index + 1).padStart(2, '0')}</span>
                     <span className="claim-content">
                       <span>{claim.claimText}</span>
-                      {claim.trustLevel ? (
+                      {claim.trustLevel || claim.status === 'error' ? (
                         <TrustBadge level={claim.trustLevel} error={claim.status === 'error'} />
                       ) : (
                         <span className="unverified">
@@ -208,6 +220,8 @@ export default function App() {
   const [answerText, setAnswerText] = useState('');
   const [question, setQuestion] = useState('');
   const [documentText, setDocumentText] = useState('');
+  const [sourceUrl, setSourceUrl] = useState('');
+  const [sourceMode, setSourceMode] = useState('document');
   const [documentRevision, setDocumentRevision] = useState(0);
   const [documentImporting, setDocumentImporting] = useState(false);
   const [result, setResult] = useState(null);
@@ -260,6 +274,8 @@ export default function App() {
         setAnswerText(check.answerText);
         setQuestion(check.question || '');
         setDocumentText(check.documentText || '');
+        setSourceUrl(check.sourceUrl || '');
+        setSourceMode(check.sourceUrl ? 'link' : 'document');
         setDocumentRevision((revision) => revision + 1);
         setResult(check);
         setSelectedId(check.claims[0]?.id || null);
@@ -324,6 +340,8 @@ export default function App() {
     setAnswerText('');
     setQuestion('');
     setDocumentText('');
+    setSourceUrl('');
+    setSourceMode('document');
     setDocumentRevision((revision) => revision + 1);
     setResult(null);
     setSelectedId(null);
@@ -338,6 +356,8 @@ export default function App() {
     setAnswerText(example.answerText);
     setQuestion(example.question);
     setDocumentText(example.documentText);
+    setSourceUrl('');
+    setSourceMode('document');
     setDocumentRevision((revision) => revision + 1);
     setResult(example);
     setSelectedId(example.claims[0].id);
@@ -364,7 +384,12 @@ export default function App() {
       const response = await fetch('/api/checks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answerText, question, documentText }),
+        body: JSON.stringify({
+          answerText,
+          question,
+          documentText: sourceMode === 'document' ? documentText : '',
+          sourceUrl: sourceMode === 'link' ? sourceUrl : '',
+        }),
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]),
       });
       const body = await response.json();
@@ -546,6 +571,21 @@ export default function App() {
                 {result.inferredQuestion && <p>Question we used: “{result.inferredQuestion}”</p>}
               </div>
             )}
+            {result?.linkedSource?.url && (
+              <div className="check-notices linked-source-notice" role="status">
+                <p>
+                  <Link2 size={15} />
+                  Source read:{' '}
+                  <a href={result.linkedSource.url} target="_blank" rel="noopener noreferrer">
+                    {result.linkedSource.title}
+                  </a>
+                </p>
+                <p>
+                  The check uses readable content from this page
+                  {result.documentText ? ' together with your document' : ''}.
+                </p>
+              </div>
+            )}
             {result && (result.claims.length > 0 || result.status === 'complete') && (
               <ResultView
                 check={result}
@@ -613,14 +653,76 @@ export default function App() {
                       placeholder="What did you ask the AI?"
                     />
                   </div>
-                  <SourceDocument
-                    key={documentRevision}
-                    value={documentText}
-                    onChange={setDocumentText}
-                    maxLength={limits.document}
-                    disabled={loading}
-                    onBusyChange={setDocumentImporting}
-                  />
+                  <fieldset className="source-choice" disabled={loading || documentImporting}>
+                    <legend>Reference source</legend>
+                    <p className="source-description">
+                      Choose a document or a link. Only the selected source is used for this check.
+                    </p>
+                    <div className="source-options">
+                      <label>
+                        <input
+                          type="radio"
+                          name="source-mode"
+                          value="document"
+                          checked={sourceMode === 'document'}
+                          onChange={() => setSourceMode('document')}
+                        />
+                        <FileText size={16} /> Upload document
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name="source-mode"
+                          value="link"
+                          checked={sourceMode === 'link'}
+                          onChange={() => setSourceMode('link')}
+                        />
+                        <Link2 size={16} /> Add a link
+                      </label>
+                    </div>
+                  </fieldset>
+                  <div hidden={sourceMode !== 'document'}>
+                    <SourceDocument
+                      key={documentRevision}
+                      value={documentText}
+                      onChange={setDocumentText}
+                      maxLength={limits.document}
+                      disabled={loading}
+                      onBusyChange={setDocumentImporting}
+                    />
+                  </div>
+                  <section
+                    hidden={sourceMode !== 'link'}
+                    className="source-url-field"
+                    aria-labelledby="source-url-label"
+                  >
+                    <div className="source-heading-row">
+                      <div>
+                        <Link2 size={17} />
+                        <label id="source-url-label" htmlFor="source-url">
+                          Source link
+                        </label>
+                      </div>
+                      <span className="optional-tag">OPTIONAL</span>
+                    </div>
+                    <p className="source-description" id="source-url-hint">
+                      Paste a link to an article, website, or readable book.
+                    </p>
+                    <input
+                      id="source-url"
+                      type="url"
+                      value={sourceUrl}
+                      onChange={(event) => setSourceUrl(event.target.value)}
+                      maxLength={2048}
+                      disabled={loading || sourceMode !== 'link'}
+                      placeholder="https://example.com/article"
+                      aria-describedby="source-url-hint source-url-note"
+                    />
+                    <p className="context-note" id="source-url-note">
+                      Tavily reads the linked page for this check. Login pages, paywalls, and book
+                      previews may not expose the complete source.
+                    </p>
+                  </section>
                   {error && (
                     <div className="error-message" role="alert">
                       <CircleHelp size={18} />
@@ -643,9 +745,13 @@ export default function App() {
                       )}
                       <span>
                         {loading
-                          ? result?.claims.length
-                            ? 'Checking evidence...'
-                            : 'Finding statements...'
+                          ? result?.status === 'loading_source'
+                            ? 'Reading linked source...'
+                            : result?.claims.length
+                              ? result.claims.every((claim) => claim.status !== 'pending')
+                                ? 'Comparing Gemini answers...'
+                                : 'Checking evidence...'
+                              : 'Finding statements...'
                           : 'Check answer'}
                       </span>
                       {!loading && <ArrowRight size={17} />}

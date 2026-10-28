@@ -10,7 +10,7 @@ import { extractClaims } from './claims.js';
 import { example } from '../../shared/example.js';
 import { AppError } from './errors.js';
 import { judgeEvidence } from './evidence.js';
-import { searchEvidence } from './sources.js';
+import { searchEvidence, extractLinkedSource, publicSourceUrl } from './sources.js';
 import { createPipeline } from './pipeline.js';
 
 const inputSchema = z
@@ -22,6 +22,13 @@ const inputSchema = z
       .refine((value) => value.trim().length > 0),
     question: z.string().max(config.MAX_QUESTION_CHARS).default(''),
     documentText: z.string().max(config.MAX_DOCUMENT_CHARS).default(''),
+    sourceUrl: z
+      .string()
+      .trim()
+      .max(2048)
+      .default('')
+      .refine((value) => !value || Boolean(publicSourceUrl(value)))
+      .transform((value) => (value ? publicSourceUrl(value) : '')),
   })
   .strict();
 
@@ -29,6 +36,7 @@ export function createApp({
   extractor = extractClaims,
   evidenceJudge = judgeEvidence,
   searcher = searchEvidence,
+  sourceLoader = extractLinkedSource,
   repository = null,
   checkSources = true,
   rateLimitMax = config.RATE_LIMIT_MAX,
@@ -38,6 +46,7 @@ export function createApp({
     extractor,
     judge: evidenceJudge,
     search: searcher,
+    loadSource: sourceLoader,
     checkSources,
     ...(repository
       ? {
@@ -78,21 +87,19 @@ export function createApp({
     standardHeaders: 'draft-8',
     legacyHeaders: false,
     handler: (_request, response) =>
-      response
-        .status(429)
-        .json({
-          error: {
-            code: 'CHECK_LIMIT',
-            message:
-              'You have reached the check limit for now. Please wait before trying again. The saved example is still available.',
-          },
-        }),
+      response.status(429).json({
+        error: {
+          code: 'CHECK_LIMIT',
+          message:
+            'You have reached the check limit for now. Please wait before trying again. The saved example is still available.',
+        },
+      }),
   });
   app.post('/api/checks', limiter, async (request, response) => {
     const parsed = inputSchema.safeParse(request.body);
     if (!parsed.success)
       throw new AppError(
-        `Enter an answer of up to ${config.MAX_ANSWER_CHARS.toLocaleString()} characters, a question of up to ${config.MAX_QUESTION_CHARS.toLocaleString()}, and a document of up to ${config.MAX_DOCUMENT_CHARS.toLocaleString()}.`,
+        `Enter an answer of up to ${config.MAX_ANSWER_CHARS.toLocaleString()} characters, a question of up to ${config.MAX_QUESTION_CHARS.toLocaleString()}, a document of up to ${config.MAX_DOCUMENT_CHARS.toLocaleString()}, and an optional public http(s) source URL.`,
         400,
         'INVALID_INPUT',
       );
@@ -124,14 +131,12 @@ export function createApp({
   app.get('/api/checks/:id/stream', async (request, response) => {
     const check = pipeline.get(request.params.id) || (await repository?.get(request.params.id));
     if (!check) throw new AppError('This check could not be found.', 404, 'CHECK_NOT_FOUND');
-    response
-      .status(200)
-      .set({
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-transform',
-        Connection: 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      });
+    response.status(200).set({
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
     response.flushHeaders();
     const send = (snapshot) => {
       if (response.writableEnded || response.destroyed) return;
@@ -178,33 +183,27 @@ export function createApp({
   }
   app.use((error, _request, response, _next) => {
     if (error.type === 'entity.too.large')
-      return response
-        .status(413)
-        .json({
-          error: {
-            code: 'INPUT_TOO_LARGE',
-            message: 'This text is too large. Please paste a shorter answer or document.',
-          },
-        });
-    if (error.type === 'entity.parse.failed')
-      return response
-        .status(400)
-        .json({
-          error: {
-            code: 'INVALID_JSON',
-            message: 'The request could not be read. Please try again.',
-          },
-        });
-    const known = error instanceof AppError;
-    // Never send or log raw provider, database, or validation error objects.
-    response
-      .status(known ? error.status : 500)
-      .json({
+      return response.status(413).json({
         error: {
-          code: known ? error.code : 'INTERNAL_ERROR',
-          message: known ? error.message : 'Something went wrong. Please try again.',
+          code: 'INPUT_TOO_LARGE',
+          message: 'This text is too large. Please paste a shorter answer or document.',
         },
       });
+    if (error.type === 'entity.parse.failed')
+      return response.status(400).json({
+        error: {
+          code: 'INVALID_JSON',
+          message: 'The request could not be read. Please try again.',
+        },
+      });
+    const known = error instanceof AppError;
+    // Never send or log raw provider, database, or validation error objects.
+    response.status(known ? error.status : 500).json({
+      error: {
+        code: known ? error.code : 'INTERNAL_ERROR',
+        message: known ? error.message : 'Something went wrong. Please try again.',
+      },
+    });
   });
   return app;
 }

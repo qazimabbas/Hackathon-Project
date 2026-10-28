@@ -1,17 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { combineTrust, repeatCheck, inferQuestion } from '../src/repeat.js';
+import { repeatCheck, inferQuestion } from '../src/repeat.js';
 
-test('repetition alone never grants High trust and contradictions remain Low', () => {
-  const strong = { hits: 5, completed: 5 };
-  assert.equal(combineTrust({ verdict: 'not_enough' }, strong), 'Medium');
-  assert.equal(combineTrust({ verdict: 'contradicted' }, strong), 'Low');
-  assert.equal(combineTrust({ verdict: 'supported' }, strong), 'High');
-  assert.equal(combineTrust({ verdict: 'supported' }, { hits: 1, completed: 5 }), 'Medium');
-  assert.equal(combineTrust(null, null), 'Medium');
-});
-
-test('five answers are independent and failed answers remain unknown, not disagreement', async () => {
+test('five fresh Gemini generations omit the original answer and failed generations stay unknown', async () => {
   let generationCalls = 0;
   const result = await repeatCheck(
     'What orbits Earth?',

@@ -13,8 +13,12 @@ export const extractionSchema = {
       maxItems: 10,
       items: {
         type: 'object',
-        properties: { exactQuote: { type: 'string' } },
-        required: ['exactQuote'],
+        properties: {
+          exactQuote: { type: 'string' },
+          kind: { type: 'string', enum: ['factual', 'abstention'] },
+          statement: { type: 'string' },
+        },
+        required: ['exactQuote', 'kind', 'statement'],
         additionalProperties: false,
       },
     },
@@ -29,6 +33,8 @@ const resultSchema = z
       .array(
         z
           .object({
+            kind: z.enum(['factual', 'abstention']).default('factual'),
+            statement: z.string().trim().min(1).max(2000).optional(),
             exactQuote: z
               .string()
               .min(1)
@@ -51,7 +57,7 @@ export function locateClaims(answerText, output, maxClaims = config.MAX_CLAIMS) 
     );
   }
   let cursor = 0;
-  return parsed.data.claims.map(({ exactQuote }) => {
+  return parsed.data.claims.map(({ exactQuote, kind, statement }) => {
     // Locate exact quotes ourselves. Model-generated character counts are unreliable,
     // particularly for emoji. JavaScript indices match React's string slicing.
     const startIndex = answerText.indexOf(exactQuote, cursor);
@@ -67,6 +73,8 @@ export function locateClaims(answerText, output, maxClaims = config.MAX_CLAIMS) 
     return {
       id: randomUUID(),
       claimText: exactQuote,
+      verificationText: statement || exactQuote,
+      kind,
       startIndex,
       endIndex,
       status: 'extracted',
