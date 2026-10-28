@@ -160,6 +160,15 @@ test('appropriate abstention reviews the full document and question rather than 
     {
       generateJson: async (request) => {
         const prompt = JSON.parse(request.prompt);
+        if (prompt.review)
+          return {
+            comparisons: Array.from({ length: 5 }, (_, answerIndex) => ({
+              answerIndex,
+              status: 'needs_review',
+              exactQuote: '',
+              reason: 'Growth not stated for this comparison.',
+            })),
+          };
         assert.equal(prompt.completeDocument, full);
         assert.equal(prompt.question, 'What was profit?');
         return {

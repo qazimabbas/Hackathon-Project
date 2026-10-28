@@ -40,6 +40,8 @@ export function createLlm({ settings = config, fetchImpl = fetch, sleep = delay 
     schema,
     model = settings.GEMINI_EXTRACT_MODEL,
     temperature = 0,
+    timeoutMs = settings.LLM_TIMEOUT_MS,
+    maxRetries = settings.LLM_MAX_RETRIES,
   }) {
     // Provider-specific alternatives can be implemented here without editing routes.
     if (settings.LLM_PROVIDER && settings.LLM_PROVIDER !== 'gemini')
@@ -55,7 +57,7 @@ export function createLlm({ settings = config, fetchImpl = fetch, sleep = delay 
         'MISSING_GEMINI_KEY',
       );
     }
-    for (let attempt = 0; attempt <= settings.LLM_MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       let response;
       try {
         response = await fetchImpl(
@@ -80,11 +82,11 @@ export function createLlm({ settings = config, fetchImpl = fetch, sleep = delay 
                   : {}),
               },
             }),
-            signal: AbortSignal.timeout(settings.LLM_TIMEOUT_MS),
+            signal: AbortSignal.timeout(timeoutMs),
           },
         );
       } catch {
-        if (attempt < settings.LLM_MAX_RETRIES) {
+        if (attempt < maxRetries) {
           await sleep(1000 * 2 ** attempt);
           continue;
         }
@@ -97,7 +99,7 @@ export function createLlm({ settings = config, fetchImpl = fetch, sleep = delay 
       if (!response.ok) {
         // Discard upstream error bodies, which may include credentials or user text.
         await response.body?.cancel();
-        if (retryableStatuses.has(response.status) && attempt < settings.LLM_MAX_RETRIES) {
+        if (retryableStatuses.has(response.status) && attempt < maxRetries) {
           const retryAfter = Number(response.headers.get('retry-after'));
           const wait =
             Number.isFinite(retryAfter) && retryAfter > 0

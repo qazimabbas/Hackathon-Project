@@ -131,7 +131,7 @@ export function HistoryPage() {
                     <div className="history-counts">
                       <span>✓ {check.overallSummary.High} High</span>
                       <span>! {check.overallSummary.Medium} Medium</span>
-                      <span>? {check.overallSummary.Low} Low</span>
+                      <span>× {check.overallSummary.Low} Low</span>
                     </div>
                   </div>
                   <ArrowUpRight size={18} />
@@ -328,7 +328,7 @@ export function StatsPage() {
               {['High', 'Medium', 'Low'].map((level, index) => (
                 <div key={level}>
                   <span className="trust-badge" data-level={level}>
-                    {['✓', '!', '?'][index]} {level} trust
+                    {['✓', '!', '×'][index]} {level} trust
                   </span>
                   <strong>
                     {data.claims ? Math.round((data[level] / data.claims) * 100) : 0}%
@@ -354,7 +354,7 @@ export function StatsPage() {
             <div className="chart-legend">
               <span>✓ High trust</span>
               <span>! Medium trust</span>
-              <span>? Low trust</span>
+              <span>× Low trust</span>
             </div>
           </section>
         </>

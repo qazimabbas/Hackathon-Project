@@ -19,9 +19,9 @@ try {
   await page.route('**/api/health', (route) => route.fulfill({ json: {} }));
   await page.route('**/api/checks', (route) => {
     const repeatResult = {
-      matches: Array(5).fill(null),
-      hits: 0,
-      completed: 0,
+      matches: Array(5).fill(status === 'agreed' ? true : status === 'disagreed' ? false : null),
+      hits: status === 'agreed' ? 5 : 0,
+      completed: ['agreed', 'disagreed'].includes(status) ? 5 : 0,
       basis: 'document',
       ...(status === 'legacy'
         ? {}
@@ -47,6 +47,17 @@ try {
           claims: [
             {
               ...example.claims[0],
+              trustLevel:
+                status === 'disagreed' ? 'Low' : status === 'unresolved' ? 'Medium' : 'High',
+              sourceResult: {
+                ...example.claims[0].sourceResult,
+                verdict:
+                  status === 'disagreed'
+                    ? 'contradicted'
+                    : status === 'unresolved'
+                      ? 'not_enough'
+                      : 'supported',
+              },
               repeatResult,
               warnings: [
                 '5 Gemini answers were unavailable or did not address this statement well enough to compare. This does not change the evidence-based trust label.',
@@ -61,17 +72,17 @@ try {
   await page.getByRole('button', { name: 'Try an example', exact: true }).click();
   await page.getByRole('button', { name: 'Check answer', exact: true }).click();
   await expect(page.locator('.repeat-detail .agreement')).toContainText(
-    '5 answers generated; none addressed this complete statement',
+    'Source fallback used for 5 checks',
   );
   await expect(page.locator('.evidence-detail .trust-badge')).toContainText('High trust');
   await expect(page.getByText(/Gemini answers were unavailable or did not address/)).toHaveCount(0);
-  await page.locator('.agreement-breakdown > summary').click();
-  await expect(page.locator('.agreement-breakdown > ol > li')).toHaveCount(5);
-  await expect(page.locator('.agreement-breakdown li').first()).toContainText(
-    'does not say this was the first',
+  await expect(page.locator('.comparison-status-list > li > strong')).toHaveText(
+    Array(5).fill('Source supports'),
   );
-  await page.getByText('Read generated answer 1', { exact: true }).click();
-  await expect(page.locator('.agreement-breakdown blockquote').first()).toHaveText(generated);
+  await expect(page.locator('.agreement-breakdown')).toHaveCount(0);
+  await expect(page.locator('.repeat-detail blockquote')).toHaveCount(0);
+  await expect(page.locator('.repeat-detail')).not.toContainText(generated);
+  assert.ok(!(await page.locator('.agreement-dots').first().textContent()).includes('?'));
   await page.screenshot({ path: '.local/agreement-diagnostics-desktop.png', fullPage: true });
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
@@ -82,17 +93,40 @@ try {
     if (width === 390)
       await page.screenshot({ path: '.local/agreement-diagnostics-mobile.png', fullPage: true });
   }
-  for (const mode of ['generation_failed', 'comparison_failed', 'legacy']) {
+  for (const mode of [
+    'generation_failed',
+    'comparison_failed',
+    'legacy',
+    'agreed',
+    'disagreed',
+    'unresolved',
+  ]) {
     status = mode;
     await page.getByRole('button', { name: 'Check answer', exact: true }).click();
     await expect(page.locator('.repeat-detail')).toContainText(
-      mode === 'generation_failed'
-        ? 'No Gemini answers could be generated'
-        : mode === 'comparison_failed'
-          ? '5 answers generated; answer comparison was unavailable'
-          : 'earlier check has no detailed comparison reasons',
+      mode === 'agreed' || mode === 'disagreed'
+        ? `${mode === 'agreed' ? 5 : 0} of 5`
+        : mode === 'unresolved'
+          ? '5 checks need review'
+          : 'Source fallback used for 5 checks',
     );
-    await expect(page.locator('.evidence-detail .trust-badge')).toContainText('High trust');
+    await expect(page.locator('.evidence-detail .trust-badge')).toContainText(
+      mode === 'disagreed' ? 'Low trust' : mode === 'unresolved' ? 'Medium trust' : 'High trust',
+    );
+    await expect(page.locator('.comparison-status-list > li > strong')).toHaveText(
+      Array(5).fill(
+        mode === 'agreed'
+          ? 'Agreed'
+          : mode === 'disagreed'
+            ? 'Disagreed'
+            : mode === 'unresolved'
+              ? 'Needs review'
+              : 'Source supports',
+      ),
+    );
+    assert.ok(!(await page.locator('.repeat-detail .agreement-dots').textContent()).includes('?'));
+    assert.ok(!(await page.locator('.evidence-detail .trust-badge').textContent()).includes('?'));
+    await expect(page.locator('.repeat-detail blockquote')).toHaveCount(0);
     assert.equal(
       await page.evaluate(() => document.documentElement.scrollWidth > innerWidth),
       false,
@@ -100,7 +134,7 @@ try {
   }
   assert.deepEqual(errors, []);
   console.log(
-    'Agreement UI passed: omitted qualifiers, generated answer text, specific failure categories, historical unknowns, unchanged trust, and mobile layouts.',
+    'Agreement UI passed: status-only checks, source fallback, explicit review state, no question-mark indicators or generated passages, preserved trust, and mobile layouts.',
   );
 } finally {
   await browser.close();

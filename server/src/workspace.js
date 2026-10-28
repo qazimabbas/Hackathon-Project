@@ -41,5 +41,18 @@ export function workspaceSession(secret) {
 export function publicCheck(check) {
   if (!check) return check;
   const { ownerId: _private, ...result } = check;
+  if (result.claims)
+    result.claims = result.claims.map((claim) => {
+      if (!claim.repeatResult?.comparisons) return claim;
+      return {
+        ...claim,
+        repeatResult: {
+          ...claim.repeatResult,
+          comparisons: claim.repeatResult.comparisons.map(
+            ({ answer: _answer, reviewQuote: _quote, ...status }) => status,
+          ),
+        },
+      };
+    });
   return result;
 }

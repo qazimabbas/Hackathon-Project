@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
 import { ArrowUpRight, Check, CircleHelp, Link, ShieldCheck } from 'lucide-react';
-import { agreementLabel, comparisonLabels } from './agreement.js';
+import { agreementLabel, comparisonLabels, checkStatus } from './agreement.js';
 
-const icons = { High: '✓', Medium: '!', Low: '?' };
+const icons = { High: '✓', Medium: '!', Low: '×' };
 export function TrustBadge({ level, error = false }) {
   return (
     <span className="trust-badge" data-level={error ? 'unverified' : level || 'pending'}>
@@ -11,30 +11,24 @@ export function TrustBadge({ level, error = false }) {
     </span>
   );
 }
-export function AgreementDots({ result, compact = false }) {
-  const label = agreementLabel(result);
+export function AgreementDots({ result, compact = false, source }) {
+  const label = agreementLabel(result, source);
   return (
     <div className={`agreement ${compact ? 'compact' : ''}`}>
       <span className="agreement-dots" role="img" aria-label={`Gemini answer agreement: ${label}`}>
         {result.matches.map((match, index) => (
           <i
             key={index}
-            className={match === null ? 'unknown' : match ? 'filled' : ''}
-            title={
-              result.comparisons?.[index]
-                ? `Answer ${index + 1}: ${comparisonLabels[result.comparisons[index].status]}. ${result.comparisons[index].reason}`
-                : `Answer ${index + 1}: ${match === null ? 'Unknown' : match ? 'Agreed' : 'Disagreed'}`
-            }
+            className={match === null ? 'fallback' : match ? 'filled' : ''}
+            title={`Check ${index + 1}: ${comparisonLabels[checkStatus(result, index, source)]}`}
           >
             {match === null
-              ? ['generation_failed', 'comparison_failed', 'unavailable'].includes(
-                  result.comparisons?.[index]?.status,
-                )
-                ? '!'
-                : '?'
+              ? checkStatus(result, index, source).startsWith('source_')
+                ? '↳'
+                : '!'
               : match
                 ? '✓'
-                : ''}
+                : '×'}
           </i>
         ))}
       </span>
@@ -132,7 +126,7 @@ export function ResultSummary({ check }) {
           })}
         </svg>
         <span>
-          {counts.unverified === total && total ? '?' : counts.High}
+          {counts.unverified === total && total ? '!' : counts.High}
           <small>{counts.unverified === total && total ? 'unrated' : `of ${total}`}</small>
         </span>
       </div>
@@ -339,40 +333,24 @@ function EvidencePanel({ claim }) {
       {claim.repeatResult && (
         <div className="repeat-detail">
           <span className="evidence-column-label">GEMINI ANSWER AGREEMENT</span>
-          <AgreementDots result={claim.repeatResult} />
-          {claim.repeatResult.comparisons ? (
-            <details className="agreement-breakdown">
-              <summary>View the five answers and comparison reasons</summary>
-              <ol>
-                {claim.repeatResult.comparisons.map((comparison, index) => (
-                  <li key={index}>
-                    <strong>
-                      Answer {index + 1}: {comparisonLabels[comparison.status]}
-                    </strong>
-                    <p>{comparison.reason}</p>
-                    {comparison.errorCode && (
-                      <p className="muted">Check code: {comparison.errorCode}</p>
-                    )}
-                    {comparison.answer !== null && (
-                      <details>
-                        <summary>Read generated answer {index + 1}</summary>
-                        <blockquote>{comparison.answer}</blockquote>
-                      </details>
-                    )}
-                  </li>
-                ))}
-              </ol>
-            </details>
-          ) : claim.repeatResult.completed < 5 ? (
-            <p>
-              Detailed comparisons are not included in this saved view. Run a new check to see the
-              answers and reasons.
-            </p>
-          ) : null}
+          <AgreementDots result={claim.repeatResult} source={source} />
+          <ol className="comparison-status-list" aria-label="Five check statuses">
+            {claim.repeatResult.matches.map((_match, index) => {
+              const status = checkStatus(claim.repeatResult, index, source);
+              return (
+                <li key={index}>
+                  <span>Check {index + 1}</span>
+                  <strong data-status={status}>{comparisonLabels[status]}</strong>
+                </li>
+              );
+            })}
+          </ol>
           <p>
             Five fresh answers from Gemini provide a separate consistency signal. They do not change
             the trust label or measure the original model’s consistency. Gemini can repeat an error
-            or fail to reproduce a correct answer. Omitted statements stay unknown.
+            or fail to reproduce a correct answer. Inconclusive comparisons receive a focused second
+            review, then use source evidence as a separately labelled fallback. If neither resolves
+            the check, it is marked Needs review.
           </p>
         </div>
       )}
@@ -559,7 +537,7 @@ export default function ResultView({ check, selectedId, onSelect, onShare, readO
               <span>
                 <span>{claim.claimText}</span>
                 {claim.repeatResult ? (
-                  <AgreementDots result={claim.repeatResult} />
+                  <AgreementDots result={claim.repeatResult} source={claim.sourceResult} />
                 ) : (
                   <p className="muted">Gemini answer agreement is still being checked.</p>
                 )}

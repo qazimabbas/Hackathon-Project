@@ -16,6 +16,7 @@ const schema = z.object({
   GEMINI_JUDGE_MODEL: z.string().default('gemini-3.6-flash'),
   GEMINI_JUDGE_FALLBACK_MODEL: z.string().default(''),
   GEMINI_REPEAT_MODEL: z.string().default('gemini-3.5-flash-lite'),
+  GEMINI_AGREEMENT_FALLBACK_MODEL: z.string().default(''),
   MONGODB_URI: z.string().default(''),
   MONGODB_DNS_SERVERS: z.string().default(''),
   TAVILY_API_KEY: z.string().default(''),

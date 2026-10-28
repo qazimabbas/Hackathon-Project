@@ -66,10 +66,11 @@ export function cacheKey(input) {
           config.GEMINI_JUDGE_MODEL,
           config.GEMINI_JUDGE_FALLBACK_MODEL || config.GEMINI_REPEAT_MODEL,
           config.GEMINI_REPEAT_MODEL,
+          config.GEMINI_AGREEMENT_FALLBACK_MODEL || config.GEMINI_JUDGE_MODEL,
         ],
         web: hasSecret(config.TAVILY_API_KEY),
         claims: config.MAX_CLAIMS,
-        version: 5,
+        version: 6,
       }),
     )
     .digest('hex');

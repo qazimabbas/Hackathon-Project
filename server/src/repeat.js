@@ -13,6 +13,7 @@ import {
   agreementPrompt,
 } from './prompts.js';
 import { AppError } from './errors.js';
+import { reviewAgreement } from './agreementReview.js';
 
 const textSchema = (key) => ({
   type: 'object',
@@ -87,8 +88,12 @@ function resultFrom(comparisons, basis) {
     basis,
     generated: comparisons.filter((item) => item.answer !== null).length,
     generationFailed: comparisons.filter((item) => item.status === 'generation_failed').length,
-    unaddressed: comparisons.filter((item) => item.status === 'not_addressed').length,
-    comparisonFailed: comparisons.filter((item) => item.status === 'comparison_failed').length,
+    unaddressed: comparisons.filter((item) =>
+      ['not_addressed', 'needs_review'].includes(item.primaryStatus || item.status),
+    ).length,
+    comparisonFailed: comparisons.filter(
+      (item) => (item.primaryStatus || item.status) === 'comparison_failed',
+    ).length,
     unavailable: comparisons.filter((item) => item.status === 'unavailable').length,
     comparisons,
   };
@@ -228,48 +233,38 @@ export async function repeatCheck(
         break;
     }
   }
-  if (!compared)
-    return {
-      answers,
-      results: Object.fromEntries(
-        claims.map(({ id }) => [
-          id,
-          resultFrom(
-            answers.map((answer, index) =>
-              answer === null
-                ? failedGeneration(index)
-                : {
-                    status: 'comparison_failed',
-                    answer,
-                    reason: comparisonError.message,
-                    errorCode: comparisonError.code,
-                  },
-            ),
-            basis,
-          ),
-        ]),
-      ),
-    };
+  const results = Object.fromEntries(
+    claims.map(({ id }) => {
+      const claim = compared?.find((item) => item.id === id);
+      return [
+        id,
+        resultFrom(
+          answers.map((answer, index) => {
+            if (answer === null) return failedGeneration(index);
+            if (!claim)
+              return {
+                status: 'comparison_failed',
+                answer,
+                reason: comparisonError.message,
+                errorCode: comparisonError.code,
+              };
+            const hit = claim.matches[index];
+            return {
+              status: hit === true ? 'agreed' : hit === false ? 'disagreed' : 'not_addressed',
+              answer,
+              reason: claim.reasons[index],
+            };
+          }),
+          basis,
+        ),
+      ];
+    }),
+  );
+  await reviewAgreement(question, claims, answers, results, provider);
   return {
     answers,
     results: Object.fromEntries(
-      compared.map((claim) => {
-        return [
-          claim.id,
-          resultFrom(
-            claim.matches.map((hit, index) =>
-              answers[index] === null
-                ? failedGeneration(index)
-                : {
-                    status: hit === true ? 'agreed' : hit === false ? 'disagreed' : 'not_addressed',
-                    answer: answers[index],
-                    reason: claim.reasons[index],
-                  },
-            ),
-            basis,
-          ),
-        ];
-      }),
+      Object.entries(results).map(([id, result]) => [id, resultFrom(result.comparisons, basis)]),
     ),
   };
 }

@@ -14,6 +14,23 @@ const good = () =>
     candidates: [{ finishReason: 'STOP', content: { parts: [{ text: '{"claims":[]}' }] } }],
   });
 
+test('focused fallbacks can bound their request timeout and disable extra retries', async () => {
+  let calls = 0;
+  const llm = createLlm({
+    settings,
+    sleep: () => assert.fail('No retry delay expected'),
+    fetchImpl: async (_url, options) => {
+      calls++;
+      assert.ok(options.signal instanceof AbortSignal);
+      return new Response('busy', { status: 429 });
+    },
+  });
+  await assert.rejects(llm.generateJson({ ...request, timeoutMs: 15000, maxRetries: 0 }), {
+    code: 'GEMINI_RATE_LIMIT',
+  });
+  assert.equal(calls, 1);
+});
+
 test('keeps the secret in a request header and never in the URL', async () => {
   const llm = createLlm({
     settings,

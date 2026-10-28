@@ -6,6 +6,7 @@ import { repeatCheck, inferQuestion, unavailableAgreement } from './repeat.js';
 import { mapConcurrent } from './concurrency.js';
 import { config } from './config.js';
 import { AppError } from './errors.js';
+import { applySourceFallback } from './agreementReview.js';
 
 export function summarize(claims) {
   const summary = { total: claims.length, High: 0, Medium: 0, Low: 0, pending: 0, errors: 0 };
@@ -192,6 +193,7 @@ export function createPipeline({
               ),
             ).results[claim.id];
           claim.repeatHits = claim.repeatResult.hits;
+          applySourceFallback(claim.repeatResult, claim.sourceResult);
         }
         await emit(job);
       }

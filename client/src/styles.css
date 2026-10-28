@@ -1272,7 +1272,7 @@ input:focus {
   border-color: var(--green);
   color: var(--surface);
 }
-.agreement-dots i.unknown {
+.agreement-dots i.fallback {
   border-style: dashed;
 }
 .claim-button.pending,
@@ -1600,34 +1600,23 @@ mark[data-level='pending'] {
   align-items: flex-start;
   font-size: 10px !important;
 }
-.agreement-breakdown {
+.comparison-status-list {
   margin-top: 14px;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.7;
+  list-style: none;
+  padding: 0;
 }
-.agreement-breakdown summary {
-  cursor: pointer;
-  color: var(--green);
-}
-.agreement-breakdown ol {
-  padding-left: 22px;
-  margin: 12px 0 0;
-}
-.agreement-breakdown li {
-  padding: 10px 0;
+.comparison-status-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
   border-top: 1px solid var(--line);
 }
-.agreement-breakdown p {
-  margin: 5px 0;
-}
-.agreement-breakdown blockquote {
-  margin: 8px 0;
-  padding: 10px;
-  background: var(--surface-soft);
-  border-left: 2px solid var(--line);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.comparison-status-list [data-status^='source_'] {
+  color: var(--green);
 }
 .claim-warning > svg {
   margin-top: 4px;

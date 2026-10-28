@@ -172,7 +172,13 @@ function StatementList({ result, selectedId, onSelect, loading, resultsRef }) {
                           {claim.status === 'pending' ? 'Checking...' : 'Not checked'}
                         </span>
                       )}
-                      {claim.repeatResult && <AgreementDots result={claim.repeatResult} compact />}
+                      {claim.repeatResult && (
+                        <AgreementDots
+                          result={claim.repeatResult}
+                          source={claim.sourceResult}
+                          compact
+                        />
+                      )}
                     </span>
                     <ArrowUpRight className="claim-arrow" size={15} />
                   </button>

@@ -1,33 +1,43 @@
 export const comparisonLabels = {
   agreed: 'Agreed',
   disagreed: 'Disagreed',
-  not_addressed: 'Not addressed',
-  generation_failed: 'Generation failed',
-  comparison_failed: 'Comparison unavailable',
-  unavailable: 'Unavailable',
+  not_addressed: 'Needs review',
+  generation_failed: 'Needs review',
+  comparison_failed: 'Needs review',
+  unavailable: 'Needs review',
+  needs_review: 'Needs review',
+  source_supported: 'Source supports',
+  source_contradicted: 'Source contradicts',
 };
 
-export function agreementLabel(result) {
+export function checkStatus(result, index, source) {
+  if (result.matches[index] === true) return 'agreed';
+  if (result.matches[index] === false) return 'disagreed';
+  const recorded = result.comparisons?.[index]?.status;
+  if (['source_supported', 'source_contradicted'].includes(recorded)) return recorded;
+  return source?.verdict === 'supported'
+    ? 'source_supported'
+    : source?.verdict === 'contradicted'
+      ? 'source_contradicted'
+      : 'needs_review';
+}
+
+export function agreementLabel(result, source) {
   const basis =
     result.basis === 'source'
       ? 'source-based '
       : result.basis === 'document'
         ? 'document-based '
         : '';
-  if (result.generated === undefined) {
-    return result.completed
-      ? `${result.hits} of ${result.completed} comparable ${basis}answers agreed${result.completed < 5 ? `; ${5 - result.completed} comparisons unknown` : ''}`
-      : 'No comparable answers were recorded. This earlier check has no detailed comparison reasons.';
-  }
-  if (result.generated === null)
-    return 'Gemini answer agreement is unavailable. See the comparison details.';
-  const failed = result.generationFailed
-    ? ` ${result.generationFailed} generation${result.generationFailed === 1 ? '' : 's'} failed.`
-    : '';
-  if (!result.generated) return 'No Gemini answers could be generated. See the failure details.';
-  if (!result.completed && result.comparisonFailed)
-    return `${result.generated} answers generated; answer comparison was unavailable.${failed}`;
-  if (!result.completed)
-    return `${result.generated} answers generated; none addressed this complete statement.${failed}`;
-  return `${result.hits} of ${result.completed} comparable ${basis}answers agreed${result.unaddressed ? `; ${result.unaddressed} did not address the full statement` : ''}.${failed}`;
+  const statuses = result.matches.map((_match, index) => checkStatus(result, index, source));
+  const fallback = statuses.filter((status) => status.startsWith('source_')).length;
+  const review = statuses.filter((status) => status === 'needs_review').length;
+  const parts = [];
+  if (result.completed)
+    parts.push(`${result.hits} of ${result.completed} comparable ${basis}Gemini checks agreed.`);
+  if (fallback)
+    parts.push(`Source fallback used for ${fallback} check${fallback === 1 ? '' : 's'}.`);
+  if (review)
+    parts.push(`${review} check${review === 1 ? '' : 's'} need${review === 1 ? 's' : ''} review.`);
+  return parts.join(' ');
 }

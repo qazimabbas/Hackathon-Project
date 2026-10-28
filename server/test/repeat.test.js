@@ -10,6 +10,18 @@ test('five fresh Gemini generations omit the original answer and failed generati
     {
       generateJson: async (request) => {
         const input = JSON.parse(request.prompt);
+        if (input.review)
+          return {
+            comparisons: input.answers.map((answer, answerIndex) => ({
+              answerIndex,
+              status: answer === null ? 'needs_review' : answerIndex === 2 ? 'disagreed' : 'agreed',
+              exactQuote: answer || '',
+              reason:
+                answerIndex === 2
+                  ? 'The orbital relationship is reversed.'
+                  : 'Same orbital relationship.',
+            })),
+          };
         if (input.claims)
           return {
             claims: [
@@ -29,7 +41,9 @@ test('five fresh Gemini generations omit the original answer and failed generati
         assert.deepEqual(input, { question: 'What orbits Earth?' });
         generationCalls++;
         if (generationCalls === 2) throw new Error('Temporary failure.');
-        return { answer: 'The Moon orbits Earth.' };
+        return {
+          answer: generationCalls === 3 ? 'Earth orbits the Moon.' : 'The Moon orbits Earth.',
+        };
       },
     },
   );
