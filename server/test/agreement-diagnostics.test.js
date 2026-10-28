@@ -155,7 +155,7 @@ test('mixed failures and missing content have separate counts and old results re
     generateJson: async (request) => {
       if (JSON.parse(request.prompt).review) return review();
       if (JSON.parse(request.prompt).claims) return comparison();
-      if (generation++ < 2) throw new AppError('Usage limit.', 503, 'GEMINI_RATE_LIMIT');
+      if (generation++ < 2) throw new AppError('Temporary failure.', 503, 'GEMINI_UNAVAILABLE');
       return { answer };
     },
   });
@@ -306,6 +306,60 @@ test('focused review uses an alternate model when the preferred reviewer is unav
   assert.ok(
     results.landing.comparisons.every(
       (item) => item.status === 'agreed' && item.reviewModel === 'alternate-reviewer',
+    ),
+  );
+});
+
+test('a quota failure stops queued generation calls and uses source fallback without inventing agreement', async () => {
+  let calls = 0;
+  const output = await repeatCheck('Question?', claims, {
+    generateJson: async () => {
+      calls++;
+      throw new AppError('Quota reached.', 503, 'GEMINI_RATE_LIMIT');
+    },
+  });
+  assert.ok(calls <= 2, 'Only already-running generations may reach the exhausted model');
+  assert.equal(output.results.landing.generated, 0);
+  const fallback = applySourceFallback(output.results.landing, { verdict: 'supported' });
+  assert.equal(fallback.sourceFallback, 5);
+  assert.equal(fallback.hits, 0);
+});
+
+test('review batches do not keep calling models already known to be unavailable', async () => {
+  const batch = Array.from({ length: 4 }, (_, index) => ({
+    id: `claim-${index}`,
+    claimText: 'A claim.',
+  }));
+  const results = Object.fromEntries(
+    batch.map(({ id }) => [
+      id,
+      {
+        comparisons: Array.from({ length: 5 }, () => ({
+          status: 'not_addressed',
+          answer,
+          reason: 'Missing detail.',
+        })),
+      },
+    ]),
+  );
+  const calls = [];
+  await reviewAgreement(
+    'Question?',
+    batch,
+    Array(5).fill(answer),
+    results,
+    {
+      generateJson: async (request) => {
+        calls.push(request.model);
+        throw new AppError('Unavailable.', 503, 'GEMINI_RATE_LIMIT');
+      },
+    },
+    { GEMINI_JUDGE_MODEL: 'preferred', GEMINI_REPEAT_MODEL: 'alternate' },
+  );
+  assert.ok(calls.length <= 4);
+  assert.ok(
+    Object.values(results).every((result) =>
+      result.comparisons.every((item) => item.status === 'needs_review'),
     ),
   );
 });

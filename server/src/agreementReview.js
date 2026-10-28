@@ -61,12 +61,17 @@ export async function reviewAgreement(
   const pending = claims.filter(({ id }) =>
     results[id]?.comparisons.some((item) => item.answer !== null && item.status !== 'agreed'),
   );
+  const blockedModels = new Map();
   await mapConcurrent(pending, 2, async (claim) => {
     const current = results[claim.id];
     let reviewed;
     let model;
     let error;
     for (const candidate of models) {
+      if (blockedModels.has(candidate)) {
+        error = blockedModels.get(candidate);
+        continue;
+      }
       try {
         const output = await provider.generateJson({
           model: candidate,
@@ -105,6 +110,12 @@ Null answers are needs_review. Keep reasons under 20 words.`,
         break;
       } catch (failure) {
         error = failure;
+        if (
+          ['GEMINI_RATE_LIMIT', 'GEMINI_UNAVAILABLE', 'GEMINI_CONNECTION', 'GEMINI_MODEL'].includes(
+            failure?.code,
+          )
+        )
+          blockedModels.set(candidate, failure);
         if (
           ['GEMINI_ACCESS', 'MISSING_GEMINI_KEY', 'PROVIDER_NOT_IMPLEMENTED'].includes(
             failure?.code,

@@ -151,7 +151,9 @@ export async function repeatCheck(
 ) {
   if (!claims.length) return { results: {}, answers: [] };
   const basis = documentText.trim() ? sourceBasis : 'question';
+  let rateLimited;
   const generations = await mapConcurrent([0, 1, 2, 3, 4], 2, async () => {
+    if (rateLimited) return { answer: null, error: safeFailure(rateLimited) };
     try {
       const result = await provider.generateJson({
         system: basis !== 'question' ? documentRepeatInstruction : repeatInstruction,
@@ -175,6 +177,7 @@ export async function repeatCheck(
         );
       return { answer: parsed.data.answer };
     } catch (error) {
+      if (error instanceof AppError && error.code === 'GEMINI_RATE_LIMIT') rateLimited = error;
       return { answer: null, error: safeFailure(error, 'GENERATION_UNAVAILABLE') };
     }
   });
@@ -199,8 +202,8 @@ export async function repeatCheck(
       ),
     };
   let compared;
-  let comparisonError;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let comparisonError = rateLimited ? safeFailure(rateLimited) : undefined;
+  for (let attempt = 0; !rateLimited && attempt < 2; attempt++) {
     try {
       const output = await provider.generateJson({
         system: agreementInstruction,

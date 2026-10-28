@@ -97,7 +97,7 @@ export function createPipeline({
           await emit(job);
         }
         // One set of five answers is shared across all claims, keeping costs bounded.
-        const repeated =
+        const runRepeated = () =>
           checkSources && questionUsed
             ? repeat(questionUsed, claims, undefined, {
                 documentText: referenceText,
@@ -177,7 +177,7 @@ export function createPipeline({
           await emit(job);
         });
         // Publish evidence ratings before waiting for supplementary Gemini agreement.
-        const { results } = await repeated;
+        const { results } = await runRepeated();
         for (const claim of job.claims) {
           claim.repeatResult =
             results[claim.id] ||

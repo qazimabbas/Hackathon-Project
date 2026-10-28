@@ -3,6 +3,33 @@ import assert from 'node:assert/strict';
 import { createPipeline } from '../src/pipeline.js';
 import { locateClaims } from '../src/claims.js';
 
+test('source verification finishes before supplementary agreement starts consuming provider quota', async () => {
+  const order = [];
+  const pipeline = createPipeline({
+    extractor: async (input) =>
+      locateClaims(input.answerText, {
+        claims: [{ exactQuote: 'First fact.' }, { exactQuote: 'Second fact.' }],
+      }),
+    judge: async (claim) => {
+      order.push(claim);
+      return { verdict: 'supported', reason: 'Source support.' };
+    },
+    repeat: async () => {
+      assert.equal(order.length, 2);
+      order.push('agreement');
+      return { results: {} };
+    },
+  });
+  const job = await pipeline.start({
+    answerText: 'First fact. Second fact.',
+    question: 'What facts?',
+    documentText: 'First fact. Second fact.',
+  });
+  await pipeline.wait(job.id);
+  assert.equal(order.at(-1), 'agreement');
+  assert.equal(pipeline.get(job.id).overallSummary.High, 2);
+});
+
 test('streams progressive evidence ratings, isolates a failed claim, and preserves Gemini agreement', async () => {
   const events = [];
   const pipeline = createPipeline({
