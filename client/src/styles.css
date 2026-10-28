@@ -1600,6 +1600,35 @@ mark[data-level='pending'] {
   align-items: flex-start;
   font-size: 10px !important;
 }
+.agreement-breakdown {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+}
+.agreement-breakdown summary {
+  cursor: pointer;
+  color: var(--green);
+}
+.agreement-breakdown ol {
+  padding-left: 22px;
+  margin: 12px 0 0;
+}
+.agreement-breakdown li {
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.agreement-breakdown p {
+  margin: 5px 0;
+}
+.agreement-breakdown blockquote {
+  margin: 8px 0;
+  padding: 10px;
+  background: var(--surface-soft);
+  border-left: 2px solid var(--line);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .claim-warning > svg {
   margin-top: 4px;
   flex-shrink: 0;

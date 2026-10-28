@@ -69,7 +69,7 @@ export function cacheKey(input) {
         ],
         web: hasSecret(config.TAVILY_API_KEY),
         claims: config.MAX_CLAIMS,
-        version: 4,
+        version: 5,
       }),
     )
     .digest('hex');
@@ -219,7 +219,7 @@ export function createRepository({ modelProvider } = {}) {
       if (!/^[a-f0-9]{48}$/.test(token)) return null;
       const Check = await model();
       const check = await Check.findOne({ shareToken: token })
-        .select(`${projection} -documentText -linkedSource.text`)
+        .select(`${projection} -documentText -linkedSource.text -claims.repeatResult.comparisons`)
         .lean();
       return check ? { ...check, readOnly: true } : null;
     }),

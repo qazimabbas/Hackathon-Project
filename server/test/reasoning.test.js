@@ -238,7 +238,21 @@ test('fresh document answers receive the same question and document, never the a
       generateJson: async (request) => {
         const prompt = JSON.parse(request.prompt);
         if (prompt.claims)
-          return { claims: [{ id: 'c', matches: [true, true, null, true, true] }] };
+          return {
+            claims: [
+              {
+                id: 'c',
+                matches: [true, true, null, true, true],
+                reasons: [
+                  'Equivalent growth.',
+                  'Equivalent growth.',
+                  'Missing growth figure.',
+                  'Equivalent growth.',
+                  'Equivalent growth.',
+                ],
+              },
+            ],
+          };
         assert.deepEqual(prompt, { question: 'What is growth?', documentText });
         assert.match(request.system, /ONLY the supplied document/);
         samples++;

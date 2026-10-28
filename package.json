@@ -19,7 +19,8 @@
     "verify:connections": "node server/scripts/verify-connections.js",
     "test:browser": "node scripts/browser-check.mjs",
     "test:documents": "node scripts/document-check.mjs",
-    "test:links": "node scripts/link-browser-check.mjs"
+    "test:links": "node scripts/link-browser-check.mjs",
+    "test:agreement": "node scripts/agreement-browser-check.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",

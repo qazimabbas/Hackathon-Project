@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { extractClaims } from './claims.js';
 import { documentSources, judgeEvidence, sourceTrust } from './evidence.js';
 import { searchEvidence, extractLinkedSource } from './sources.js';
-import { repeatCheck, inferQuestion } from './repeat.js';
+import { repeatCheck, inferQuestion, unavailableAgreement } from './repeat.js';
 import { mapConcurrent } from './concurrency.js';
 import { config } from './config.js';
 import { AppError } from './errors.js';
@@ -101,7 +101,13 @@ export function createPipeline({
             ? repeat(questionUsed, claims, undefined, {
                 documentText: referenceText,
                 basis: job.sourceUrl ? 'source' : 'document',
-              }).catch(() => ({ results: {}, answers: [] }))
+              }).catch((error) =>
+                unavailableAgreement(
+                  claims,
+                  job.sourceUrl ? 'source' : referenceText.trim() ? 'document' : 'question',
+                  error,
+                ),
+              )
             : Promise.resolve({ results: {}, answers: [] });
         await mapConcurrent(claims, config.CLAIM_CONCURRENCY, async (claim, index) => {
           let sourceResult = null,
@@ -172,17 +178,20 @@ export function createPipeline({
         // Publish evidence ratings before waiting for supplementary Gemini agreement.
         const { results } = await repeated;
         for (const claim of job.claims) {
-          claim.repeatResult = results[claim.id] || {
-            matches: [null, null, null, null, null],
-            hits: 0,
-            completed: 0,
-            basis: job.sourceUrl ? 'source' : job.documentText.trim() ? 'document' : 'question',
-          };
+          claim.repeatResult =
+            results[claim.id] ||
+            unavailableAgreement(
+              [claim],
+              job.sourceUrl ? 'source' : job.documentText.trim() ? 'document' : 'question',
+              new AppError(
+                questionUsed
+                  ? 'Gemini answer comparison was unavailable.'
+                  : 'Add the original question to generate and compare five Gemini answers.',
+                502,
+                questionUsed ? 'AGREEMENT_UNAVAILABLE' : 'QUESTION_REQUIRED',
+              ),
+            ).results[claim.id];
           claim.repeatHits = claim.repeatResult.hits;
-          if (claim.repeatResult.completed < 5)
-            claim.warnings.push(
-              `${5 - claim.repeatResult.completed} Gemini answers were unavailable or did not address this statement well enough to compare. This does not change the evidence-based trust label.`,
-            );
         }
         await emit(job);
       }

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { ArrowUpRight, Check, CircleHelp, Link, ShieldCheck } from 'lucide-react';
+import { agreementLabel, comparisonLabels } from './agreement.js';
 
 const icons = { High: '✓', Medium: '!', Low: '?' };
 export function TrustBadge({ level, error = false }) {
@@ -11,15 +12,29 @@ export function TrustBadge({ level, error = false }) {
   );
 }
 export function AgreementDots({ result, compact = false }) {
-  const label = result.completed
-    ? `${result.hits} of ${result.completed} comparable ${result.basis === 'source' ? 'source-based ' : result.basis === 'document' ? 'document-based ' : ''}answers agreed${result.completed < 5 ? `; ${5 - result.completed} not comparable` : ''}`
-    : 'No comparable Gemini answers. Review the evidence assessment below.';
+  const label = agreementLabel(result);
   return (
     <div className={`agreement ${compact ? 'compact' : ''}`}>
       <span className="agreement-dots" role="img" aria-label={`Gemini answer agreement: ${label}`}>
         {result.matches.map((match, index) => (
-          <i key={index} className={match === null ? 'unknown' : match ? 'filled' : ''}>
-            {match === null ? '?' : match ? '✓' : ''}
+          <i
+            key={index}
+            className={match === null ? 'unknown' : match ? 'filled' : ''}
+            title={
+              result.comparisons?.[index]
+                ? `Answer ${index + 1}: ${comparisonLabels[result.comparisons[index].status]}. ${result.comparisons[index].reason}`
+                : `Answer ${index + 1}: ${match === null ? 'Unknown' : match ? 'Agreed' : 'Disagreed'}`
+            }
+          >
+            {match === null
+              ? ['generation_failed', 'comparison_failed', 'unavailable'].includes(
+                  result.comparisons?.[index]?.status,
+                )
+                ? '!'
+                : '?'
+              : match
+                ? '✓'
+                : ''}
           </i>
         ))}
       </span>
@@ -325,6 +340,35 @@ function EvidencePanel({ claim }) {
         <div className="repeat-detail">
           <span className="evidence-column-label">GEMINI ANSWER AGREEMENT</span>
           <AgreementDots result={claim.repeatResult} />
+          {claim.repeatResult.comparisons ? (
+            <details className="agreement-breakdown">
+              <summary>View the five answers and comparison reasons</summary>
+              <ol>
+                {claim.repeatResult.comparisons.map((comparison, index) => (
+                  <li key={index}>
+                    <strong>
+                      Answer {index + 1}: {comparisonLabels[comparison.status]}
+                    </strong>
+                    <p>{comparison.reason}</p>
+                    {comparison.errorCode && (
+                      <p className="muted">Check code: {comparison.errorCode}</p>
+                    )}
+                    {comparison.answer !== null && (
+                      <details>
+                        <summary>Read generated answer {index + 1}</summary>
+                        <blockquote>{comparison.answer}</blockquote>
+                      </details>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </details>
+          ) : claim.repeatResult.completed < 5 ? (
+            <p>
+              Detailed comparisons are not included in this saved view. Run a new check to see the
+              answers and reasons.
+            </p>
+          ) : null}
           <p>
             Five fresh answers from Gemini provide a separate consistency signal. They do not change
             the trust label or measure the original model’s consistency. Gemini can repeat an error
@@ -332,12 +376,19 @@ function EvidencePanel({ claim }) {
           </p>
         </div>
       )}
-      {claim.warnings?.map((warning, index) => (
-        <p className="claim-warning" key={index}>
-          <CircleHelp size={13} />
-          {warning}
-        </p>
-      ))}
+      {claim.warnings
+        ?.filter(
+          (warning) =>
+            !/^\d+ (Gemini|fresh) answers were unavailable or did not address this statement well enough to compare\./.test(
+              warning,
+            ),
+        )
+        .map((warning, index) => (
+          <p className="claim-warning" key={index}>
+            <CircleHelp size={13} />
+            {warning}
+          </p>
+        ))}
     </div>
   );
 }

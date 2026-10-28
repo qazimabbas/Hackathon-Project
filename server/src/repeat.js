@@ -36,8 +36,14 @@ const matchesSchema = {
             maxItems: 5,
             items: { type: ['boolean', 'null'] },
           },
+          reasons: {
+            type: 'array',
+            minItems: 5,
+            maxItems: 5,
+            items: { type: 'string' },
+          },
         },
-        required: ['id', 'matches'],
+        required: ['id', 'matches', 'reasons'],
         additionalProperties: false,
       },
     },
@@ -49,11 +55,68 @@ const matchesValidator = z
   .object({
     claims: z
       .array(
-        z.object({ id: z.string(), matches: z.array(z.boolean().nullable()).length(5) }).strict(),
+        z
+          .object({
+            id: z.string(),
+            matches: z.array(z.boolean().nullable()).length(5),
+            reasons: z.array(z.string().trim().min(1).max(600)).length(5),
+          })
+          .strict(),
       )
       .max(10),
   })
   .strict();
+
+function safeFailure(error, fallback = 'AGREEMENT_UNAVAILABLE') {
+  return error instanceof AppError
+    ? { code: error.code, message: error.message }
+    : {
+        code: fallback,
+        message: 'The Gemini agreement service could not complete this step. Try a new check.',
+      };
+}
+
+function resultFrom(comparisons, basis) {
+  const matches = comparisons.map(({ status }) =>
+    status === 'agreed' ? true : status === 'disagreed' ? false : null,
+  );
+  return {
+    matches,
+    hits: matches.filter((hit) => hit === true).length,
+    completed: matches.filter((hit) => hit !== null).length,
+    basis,
+    generated: comparisons.filter((item) => item.answer !== null).length,
+    generationFailed: comparisons.filter((item) => item.status === 'generation_failed').length,
+    unaddressed: comparisons.filter((item) => item.status === 'not_addressed').length,
+    comparisonFailed: comparisons.filter((item) => item.status === 'comparison_failed').length,
+    unavailable: comparisons.filter((item) => item.status === 'unavailable').length,
+    comparisons,
+  };
+}
+
+export function unavailableAgreement(claims, basis, error) {
+  const failure = safeFailure(error);
+  return {
+    answers: [],
+    results: Object.fromEntries(
+      claims.map(({ id }) => [
+        id,
+        {
+          ...resultFrom(
+            Array.from({ length: 5 }, () => ({
+              status: 'unavailable',
+              answer: null,
+              reason: failure.message,
+              errorCode: failure.code,
+            })),
+            basis,
+          ),
+          generated: null,
+        },
+      ]),
+    ),
+  };
+}
 
 export async function inferQuestion(answerText, provider = llm) {
   const output = await provider.generateJson({
@@ -83,7 +146,7 @@ export async function repeatCheck(
 ) {
   if (!claims.length) return { results: {}, answers: [] };
   const basis = documentText.trim() ? sourceBasis : 'question';
-  const answers = await mapConcurrent([0, 1, 2, 3, 4], 2, async () => {
+  const generations = await mapConcurrent([0, 1, 2, 3, 4], 2, async () => {
     try {
       const result = await provider.generateJson({
         system: basis !== 'question' ? documentRepeatInstruction : repeatInstruction,
@@ -95,13 +158,27 @@ export async function repeatCheck(
         model: config.GEMINI_REPEAT_MODEL,
         temperature: 0.9,
       });
-      return z
+      const parsed = z
         .object({ answer: z.string().trim().min(1).max(5000) })
         .strict()
-        .parse(result).answer;
-    } catch {
-      return null;
+        .safeParse(result);
+      if (!parsed.success)
+        throw new AppError(
+          'Gemini returned a fresh answer in an unreadable format.',
+          502,
+          'INVALID_FRESH_ANSWER',
+        );
+      return { answer: parsed.data.answer };
+    } catch (error) {
+      return { answer: null, error: safeFailure(error, 'GENERATION_UNAVAILABLE') };
     }
+  });
+  const answers = generations.map(({ answer }) => answer);
+  const failedGeneration = (index) => ({
+    status: 'generation_failed',
+    answer: null,
+    reason: generations[index].error.message,
+    errorCode: generations[index].error.code,
   });
   if (!answers.some(Boolean))
     return {
@@ -109,41 +186,88 @@ export async function repeatCheck(
       results: Object.fromEntries(
         claims.map((claim) => [
           claim.id,
-          { matches: [null, null, null, null, null], hits: 0, completed: 0, basis },
+          resultFrom(
+            answers.map((_answer, index) => failedGeneration(index)),
+            basis,
+          ),
         ]),
       ),
     };
-  const output = await provider.generateJson({
-    system: agreementInstruction,
-    prompt: agreementPrompt(claims, answers),
-    schema: matchesSchema,
-    model: config.GEMINI_REPEAT_MODEL,
-  });
-  const parsed = matchesValidator.safeParse(output);
-  if (
-    !parsed.success ||
-    parsed.data.claims.length !== claims.length ||
-    new Set(parsed.data.claims.map((claim) => claim.id)).size !== claims.length ||
-    !claims.every((claim) => parsed.data.claims.some((item) => item.id === claim.id))
-  )
-    throw new AppError(
-      'The repeated answers could not be compared reliably.',
-      502,
-      'INVALID_AGREEMENT',
-    );
+  let compared;
+  let comparisonError;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const output = await provider.generateJson({
+        system: agreementInstruction,
+        prompt: agreementPrompt(claims, answers, question),
+        schema: matchesSchema,
+        model: config.GEMINI_REPEAT_MODEL,
+      });
+      const parsed = matchesValidator.safeParse(output);
+      if (
+        !parsed.success ||
+        parsed.data.claims.length !== claims.length ||
+        new Set(parsed.data.claims.map((claim) => claim.id)).size !== claims.length ||
+        !claims.every((claim) => parsed.data.claims.some((item) => item.id === claim.id))
+      )
+        throw new AppError(
+          'The generated answers could not be compared reliably.',
+          502,
+          'INVALID_AGREEMENT',
+        );
+      compared = parsed.data.claims;
+      break;
+    } catch (error) {
+      comparisonError = safeFailure(error);
+      // Repair only malformed comparisons, retaining the five original answers.
+      if (
+        !['INVALID_AGREEMENT', 'INVALID_LLM_JSON', 'INCOMPLETE_LLM_OUTPUT'].includes(
+          comparisonError.code,
+        )
+      )
+        break;
+    }
+  }
+  if (!compared)
+    return {
+      answers,
+      results: Object.fromEntries(
+        claims.map(({ id }) => [
+          id,
+          resultFrom(
+            answers.map((answer, index) =>
+              answer === null
+                ? failedGeneration(index)
+                : {
+                    status: 'comparison_failed',
+                    answer,
+                    reason: comparisonError.message,
+                    errorCode: comparisonError.code,
+                  },
+            ),
+            basis,
+          ),
+        ]),
+      ),
+    };
   return {
     answers,
     results: Object.fromEntries(
-      parsed.data.claims.map((claim) => {
-        const matches = claim.matches.map((hit, index) => (answers[index] === null ? null : hit));
+      compared.map((claim) => {
         return [
           claim.id,
-          {
-            matches,
-            hits: matches.filter((hit) => hit === true).length,
-            completed: matches.filter((hit) => hit !== null).length,
+          resultFrom(
+            claim.matches.map((hit, index) =>
+              answers[index] === null
+                ? failedGeneration(index)
+                : {
+                    status: hit === true ? 'agreed' : hit === false ? 'disagreed' : 'not_addressed',
+                    answer: answers[index],
+                    reason: claim.reasons[index],
+                  },
+            ),
             basis,
-          },
+          ),
         ];
       }),
     ),
