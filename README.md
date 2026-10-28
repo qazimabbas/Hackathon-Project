@@ -196,6 +196,18 @@ shared/example.js  Offline demo shared by both sides
 | 6     | Real Atlas save/reopen/cache/stats/share verification.                                 |
 | 7     | Offline demo, animations, plain labels, errors, dark mode, mobile and keyboard access. |
 
+## Vercel deployment
+
+The repository includes `vercel.json` and `api/index.js` for a single Vercel project that serves both the Vite frontend and Express API. Static assets are served by Vercel's CDN; `/api/*` goes to the Node function. Run the project from the repository root, not the `client` directory. Node 24 is supported by this project.
+
+Configure `GEMINI_API_KEY`, `MONGODB_URI`, `TAVILY_API_KEY`, the desired Gemini model names, and a random `SESSION_SECRET` of at least 32 characters as private production environment variables. Set `NODE_ENV=production` and `CLIENT_ORIGIN` to the deployed origin. The deployment uses a 45-second provider timeout and one retry to fit the hosted runtime. Local Atlas DNS overrides are normally unnecessary on Vercel. Never upload `.env`, `.env.local`, or `.local`; `.vercelignore` excludes them.
+
+Hosted submissions stream snapshots over the POST request, keeping the function invocation alive until verification and saving finish. JSON-only callers receive the completed result. Progress is stored in a separate Atlas job collection and can be read across function instances; temporary job snapshots expire after 24 hours. Completed history remains in the normal checks collection. The function has a 300-second maximum duration. Interrupted jobs are reported as timed out after that allowance; they are not automatically resumed. Provider retries, the per-instance concurrent-job limit, and per-instance IP rate limiting still apply.
+
+On the hosted app, signed HttpOnly browser cookies isolate each visitor's saved checks, full source text, history, statistics, cache entries, and active jobs. Existing unscoped local history is not exposed to hosted visitors. Clearing cookies or using another browser creates a new workspace. Explicit share tokens remain publicly readable and omit full source text. Local development retains its existing single-workspace behavior.
+
+Use `npx vercel login`, link the project with `npx vercel link`, configure the environment, then deploy with `npx vercel --prod`. GitHub repository integration is optional for CLI deployments; enabling it requires the Vercel GitHub application to have access to the repository.
+
 ## Troubleshooting
 
 - Gemini: check API access, model availability, and quota, then restart after editing `.env`.

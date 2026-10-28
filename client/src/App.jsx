@@ -22,6 +22,7 @@ import { example } from '../../shared/example.js';
 import ResultView, { AgreementDots, TrustBadge } from './Results.jsx';
 import { HistoryPage, SharedPage, StatsPage } from './Pages.jsx';
 import SourceDocument from './SourceDocument.jsx';
+import { readCheckStream } from './checkStream.js';
 
 const initialLimits = { answer: 12000, question: 2000, document: 60000, claims: 10 };
 const steps = [
@@ -380,18 +381,43 @@ export default function App() {
     setError('');
     setResult(null);
     setSelectedId(null);
+    let showedResults = false;
+    const receiveSnapshot = (check) => {
+      if (attempt !== requestNumber.current) return;
+      setError('');
+      setResult(check);
+      if (!showedResults && check.claims.length) {
+        showedResults = true;
+        requestAnimationFrame(() =>
+          document.querySelector('.full-result')?.scrollIntoView({
+            behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+            block: 'start',
+          }),
+        );
+      }
+      setSelectedId((previous) => previous || check.claims[0]?.id || null);
+      if (['complete', 'failed'].includes(check.status)) {
+        streamRef.current?.close();
+        setLoading(false);
+        if (check.error) setError(check.error.message);
+      }
+    };
     try {
       const response = await fetch('/api/checks', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
         body: JSON.stringify({
           answerText,
           question,
           documentText: sourceMode === 'document' ? documentText : '',
           sourceUrl: sourceMode === 'link' ? sourceUrl : '',
         }),
-        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(180000)]),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(310000)]),
       });
+      if (response.ok && response.headers.get('Content-Type')?.includes('text/event-stream')) {
+        await readCheckStream(response, receiveSnapshot);
+        return;
+      }
       const body = await response.json();
       if (!response.ok)
         throw new Error(body.error?.message || 'The check could not finish. Please try again.');
@@ -405,7 +431,6 @@ export default function App() {
       const stream = new EventSource(`/api/checks/${encodeURIComponent(body.id)}/stream`);
       streamRef.current = stream;
       let failures = 0;
-      let showedResults = false;
       stream.addEventListener('snapshot', (message) => {
         if (attempt !== requestNumber.current) {
           stream.close();
@@ -414,25 +439,7 @@ export default function App() {
         try {
           const check = JSON.parse(message.data);
           failures = 0;
-          setError('');
-          setResult(check);
-          if (!showedResults && check.claims.length) {
-            showedResults = true;
-            requestAnimationFrame(() =>
-              document.querySelector('.full-result')?.scrollIntoView({
-                behavior: matchMedia('(prefers-reduced-motion: reduce)').matches
-                  ? 'instant'
-                  : 'smooth',
-                block: 'start',
-              }),
-            );
-          }
-          setSelectedId((previous) => previous || check.claims[0]?.id || null);
-          if (['complete', 'failed'].includes(check.status)) {
-            stream.close();
-            setLoading(false);
-            if (check.error) setError(check.error.message);
-          }
+          receiveSnapshot(check);
         } catch {
           stream.close();
           setLoading(false);
@@ -457,7 +464,7 @@ export default function App() {
       if (attempt !== requestNumber.current || controller.signal.aborted) return;
       setError(
         failure instanceof TypeError || failure instanceof SyntaxError
-          ? 'Could not reach the app server. Make sure npm run dev is running. The saved example still works.'
+          ? 'Could not reach the app server. Check your connection and try again. The saved example still works.'
           : failure.message,
       );
       setLoading(false);

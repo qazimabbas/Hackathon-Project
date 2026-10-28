@@ -130,6 +130,55 @@ try {
   assert.equal(await page.getByText(/This saved check uses an earlier trust policy/).count(), 0);
   await page.unroute('**/api/checks');
 
+  // Hosted deployments stream the POST itself, rather than starting a second request.
+  await page.route('**/api/checks', (route) => {
+    const base = {
+      id: 'hosted-browser',
+      mode: 'live',
+      trustPolicy: 'evidence-only-v1',
+      answerText: 'The Moon orbits Earth.',
+      question: 'What orbits Earth?',
+      claims: [],
+      warnings: [],
+      status: 'queued',
+    };
+    const finished = {
+      ...base,
+      status: 'complete',
+      claims: [
+        {
+          id: 'moon',
+          claimText: base.answerText,
+          startIndex: 0,
+          endIndex: base.answerText.length,
+          status: 'complete',
+          trustLevel: 'High',
+          reasonText: 'Supported by source evidence.',
+          sourceResult: {
+            verdict: 'supported',
+            sourceKind: 'wikipedia',
+            sourceTitle: 'Moon',
+            evidenceSnippet: base.answerText,
+          },
+          repeatResult: { hits: 0, completed: 5, matches: [false, false, false, false, false] },
+        },
+      ],
+    };
+    assert.equal(route.request().headers().accept, 'text/event-stream');
+    return route.fulfill({
+      contentType: 'text/event-stream',
+      body: [base, finished]
+        .map((check) => `event: snapshot\ndata: ${JSON.stringify(check)}\n\n`)
+        .join(''),
+    });
+  });
+  await page.getByRole('button', { name: 'Check answer', exact: true }).click();
+  await page.getByRole('heading', { name: 'Backed by a public source' }).waitFor();
+  assert.ok(await page.getByRole('button', { name: 'Check answer', exact: true }).isEnabled());
+  assert.match(await page.locator('.repeat-detail').textContent(), /0 of 5/);
+  assert.match(await page.locator('.evidence-detail .trust-badge').textContent(), /High trust/);
+  await page.unroute('**/api/checks');
+
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
     await page.getByRole('button', { name: 'Try an example' }).click();

@@ -19,6 +19,7 @@ const schema = z.object({
   MONGODB_URI: z.string().default(''),
   MONGODB_DNS_SERVERS: z.string().default(''),
   TAVILY_API_KEY: z.string().default(''),
+  SESSION_SECRET: z.string().default(''),
   PORT: integer(3001, 1, 65535),
   CLIENT_PORT: integer(5173, 1, 65535),
   CLIENT_ORIGIN: z.url().default('http://127.0.0.1:5173'),

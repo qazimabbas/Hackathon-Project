@@ -92,6 +92,12 @@ export function HistoryPage() {
         icon={Clock3}
       />
       <ApiState {...state} />
+      {state.data?.privateWorkspace && (
+        <p className="context-note">
+          Your hosted history is private to this browser. Clearing site cookies starts a new
+          history. Use Share result to give someone access to a specific result.
+        </p>
+      )}
       {!state.loading &&
         !state.error &&
         (state.data?.checks.length ? (

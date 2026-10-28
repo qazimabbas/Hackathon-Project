@@ -25,6 +25,7 @@ const claimSchema = new mongoose.Schema(
 );
 const checkSchema = new mongoose.Schema({
   id: { type: String, required: true, unique: true },
+  ownerId: { type: String, index: true },
   cacheKey: { type: String, required: true, index: true },
   answerText: { type: String, required: true },
   question: String,
@@ -59,6 +60,7 @@ export function cacheKey(input) {
         question: input.question || '',
         source: input.documentText || '',
         sourceUrl: input.sourceUrl || '',
+        ownerId: input.ownerId || '',
         models: [
           config.GEMINI_EXTRACT_MODEL,
           config.GEMINI_JUDGE_MODEL,
@@ -72,7 +74,8 @@ export function cacheKey(input) {
     )
     .digest('hex');
 }
-const projection = '-_id -__v -cacheKey -shareToken';
+const projection = '-_id -__v -cacheKey -shareToken -ownerId';
+const workspace = (ownerId) => (ownerId ? { ownerId } : {});
 const wrap =
   (operation) =>
   async (...args) => {
@@ -104,9 +107,11 @@ export function createRepository({ modelProvider } = {}) {
         { upsert: true, runValidators: true },
       );
     }),
-    get: wrap(async (id) => {
+    get: wrap(async (id, ownerId) => {
       const Check = await model();
-      return Check.findOne({ id }).select(projection).lean();
+      return Check.findOne({ id, ...workspace(ownerId) })
+        .select(projection)
+        .lean();
     }),
     findCached: wrap(async (input) => {
       const Check = await model();
@@ -122,10 +127,10 @@ export function createRepository({ modelProvider } = {}) {
         .select(projection)
         .lean();
     }),
-    history: wrap(async (page = 1) => {
+    history: wrap(async (page = 1, ownerId) => {
       const Check = await model();
       const [checks, total] = await Promise.all([
-        Check.find()
+        Check.find(workspace(ownerId))
           .sort({ createdAt: -1 })
           .skip((page - 1) * 20)
           .limit(20)
@@ -133,14 +138,15 @@ export function createRepository({ modelProvider } = {}) {
             'id answerText question createdAt overallSummary claims.id claims.startIndex claims.endIndex claims.trustLevel -_id',
           )
           .lean(),
-        Check.countDocuments(),
+        Check.countDocuments(workspace(ownerId)),
       ]);
       return { checks, total, page, pageSize: 20 };
     }),
-    stats: wrap(async () => {
+    stats: wrap(async (ownerId) => {
       const Check = await model();
       const [totals, trend] = await Promise.all([
         Check.aggregate([
+          { $match: workspace(ownerId) },
           {
             $group: {
               _id: null,
@@ -153,7 +159,12 @@ export function createRepository({ modelProvider } = {}) {
           },
         ]),
         Check.aggregate([
-          { $match: { createdAt: { $gte: new Date(Date.now() - 30 * 86400000) } } },
+          {
+            $match: {
+              ...workspace(ownerId),
+              createdAt: { $gte: new Date(Date.now() - 30 * 86400000) },
+            },
+          },
           {
             $group: {
               _id: {
@@ -193,9 +204,9 @@ export function createRepository({ modelProvider } = {}) {
       });
       return { ...summary, trend: filledTrend, timezone: 'Asia/Karachi' };
     }),
-    share: wrap(async (id) => {
+    share: wrap(async (id, ownerId) => {
       const Check = await model();
-      const record = await Check.findOne({ id });
+      const record = await Check.findOne({ id, ...workspace(ownerId) });
       if (!record)
         throw new AppError('This saved check could not be found.', 404, 'CHECK_NOT_FOUND');
       if (!record.shareToken) {

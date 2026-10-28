@@ -27,22 +27,42 @@ export function createPipeline({
   checkSources = true,
   onComplete = async () => {},
   findCached = async () => null,
+  jobStore = null,
 } = {}) {
   const jobs = new Map(),
     listeners = new Map();
   let active = 0;
+  const executions = new Map();
+  const persistence = new Map();
   const snapshot = (job) => structuredClone(job);
-  function emit(job) {
+  async function emit(job) {
     job.overallSummary = summarize(job.claims);
+    if (jobStore) {
+      const update = snapshot(job);
+      const write = (persistence.get(job.id) || Promise.resolve()).then(() =>
+        jobStore.save(update),
+      );
+      persistence.set(
+        job.id,
+        write.catch(() => {}),
+      );
+      try {
+        await write;
+      } catch {
+        const warning =
+          'Some progress updates could not be stored. Keep this check open until it finishes.';
+        if (!job.warnings.includes(warning)) job.warnings.push(warning);
+      }
+    }
     for (const listener of listeners.get(job.id) || []) listener(snapshot(job));
   }
   async function run(job) {
     try {
       if (job.sourceUrl && checkSources) {
         job.status = 'loading_source';
-        emit(job);
+        await emit(job);
         job.linkedSource = await loadSource(job.sourceUrl);
-        emit(job);
+        await emit(job);
       }
       const referenceText = [job.documentText, job.linkedSource?.text]
         .filter((text) => text?.trim())
@@ -53,11 +73,11 @@ export function createPipeline({
           : 'link'
         : 'document';
       job.status = 'extracting';
-      emit(job);
+      await emit(job);
       const claims = await extractor(job);
       job.claims = claims.map((claim) => ({ ...claim, status: 'pending' }));
       job.status = 'checking';
-      emit(job);
+      await emit(job);
       if (claims.length) {
         let questionUsed = job.question;
         if (!questionUsed.trim() && checkSources) {
@@ -73,7 +93,7 @@ export function createPipeline({
               'A question could not be inferred. Add the original question for a repeat check.',
             );
           }
-          emit(job);
+          await emit(job);
         }
         // One set of five answers is shared across all claims, keeping costs bounded.
         const repeated =
@@ -147,7 +167,7 @@ export function createPipeline({
                 : 'No proof found.'),
             warnings,
           };
-          emit(job);
+          await emit(job);
         });
         // Publish evidence ratings before waiting for supplementary Gemini agreement.
         const { results } = await repeated;
@@ -164,7 +184,7 @@ export function createPipeline({
               `${5 - claim.repeatResult.completed} Gemini answers were unavailable or did not address this statement well enough to compare. This does not change the evidence-based trust label.`,
             );
         }
-        emit(job);
+        await emit(job);
       }
       job.status = 'complete';
       job.completedAt = new Date().toISOString();
@@ -178,7 +198,7 @@ export function createPipeline({
           'This check could not be saved to history. Keep this page open and check the database connection.',
         );
       }
-      emit(job);
+      await emit(job);
     } catch (error) {
       job.status = 'failed';
       job.error = {
@@ -188,9 +208,10 @@ export function createPipeline({
             ? error.message
             : 'This check could not finish. Please try again.',
       };
-      emit(job);
+      await emit(job);
     } finally {
       active--;
+      persistence.delete(job.id);
     }
   }
   async function start(input) {
@@ -209,7 +230,8 @@ export function createPipeline({
         job.answerText === input.answerText &&
         job.question === input.question &&
         job.documentText === input.documentText &&
-        job.sourceUrl === (input.sourceUrl || ''),
+        job.sourceUrl === (input.sourceUrl || '') &&
+        job.ownerId === input.ownerId,
     );
     if (inProgress) return snapshot(inProgress);
     if (active >= 2)
@@ -238,9 +260,15 @@ export function createPipeline({
       questionInferred: false,
       overallSummary: summarize([]),
     };
+    if (jobStore) await jobStore.save(snapshot(job));
     jobs.set(job.id, job);
     active++;
-    setImmediate(() => void run(job));
+    const execution = new Promise((resolve) => setImmediate(resolve)).then(() => run(job));
+    executions.set(job.id, execution);
+    void execution.then(
+      () => executions.delete(job.id),
+      () => executions.delete(job.id),
+    );
     return snapshot(job);
   }
   function subscribe(id, callback) {
@@ -252,5 +280,10 @@ export function createPipeline({
       if (!subscribers?.size) listeners.delete(id);
     };
   }
-  return { start, get: (id) => (jobs.has(id) ? snapshot(jobs.get(id)) : null), subscribe };
+  return {
+    start,
+    get: (id) => (jobs.has(id) ? snapshot(jobs.get(id)) : null),
+    subscribe,
+    wait: (id) => executions.get(id) || Promise.resolve(),
+  };
 }

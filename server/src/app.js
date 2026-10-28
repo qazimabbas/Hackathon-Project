@@ -12,6 +12,7 @@ import { AppError } from './errors.js';
 import { judgeEvidence } from './evidence.js';
 import { searchEvidence, extractLinkedSource, publicSourceUrl } from './sources.js';
 import { createPipeline } from './pipeline.js';
+import { workspaceSession, publicCheck } from './workspace.js';
 
 const inputSchema = z
   .object({
@@ -40,6 +41,11 @@ export function createApp({
   repository = null,
   checkSources = true,
   rateLimitMax = config.RATE_LIMIT_MAX,
+  jobStore = null,
+  streamChecks = false,
+  trustProxy = false,
+  privateWorkspaces = false,
+  sessionSecret = config.SESSION_SECRET,
 } = {}) {
   const app = express();
   const pipeline = createPipeline({
@@ -48,6 +54,7 @@ export function createApp({
     search: searcher,
     loadSource: sourceLoader,
     checkSources,
+    jobStore,
     ...(repository
       ? {
           onComplete: (check) => repository.save(check),
@@ -56,9 +63,11 @@ export function createApp({
       : {}),
   });
   app.disable('x-powered-by');
+  if (trustProxy) app.set('trust proxy', trustProxy);
   app.use(helmet());
   app.use(cors({ origin: config.CLIENT_ORIGIN }));
   app.use(express.json({ limit: '512kb' }));
+  if (privateWorkspaces) app.use('/api', workspaceSession(sessionSecret));
   app.use('/api', (_request, response, next) => {
     response.set('Cache-Control', 'no-store');
     next();
@@ -103,8 +112,47 @@ export function createApp({
         400,
         'INVALID_INPUT',
       );
-    const check = await pipeline.start(parsed.data);
-    response.status(check.cached ? 200 : 202).json({ id: check.id, check });
+    const check = await pipeline.start({
+      ...parsed.data,
+      ...(request.workspaceId ? { ownerId: request.workspaceId } : {}),
+    });
+    if (streamChecks && !check.cached) {
+      if (request.accepts(['json', 'text/event-stream']) === 'text/event-stream') {
+        response.status(200).set({
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache, no-transform',
+          'X-Accel-Buffering': 'no',
+        });
+        response.flushHeaders();
+        const send = (snapshot) => {
+          if (!response.writableEnded && !response.destroyed)
+            response.write(`event: snapshot\ndata: ${JSON.stringify(publicCheck(snapshot))}\n\n`);
+        };
+        const unsubscribe = pipeline.subscribe(check.id, send);
+        const heartbeat = setInterval(() => {
+          if (!response.writableEnded && !response.destroyed) response.write(': keep-alive\n\n');
+        }, 15000);
+        response.on('close', () => {
+          clearInterval(heartbeat);
+          unsubscribe();
+        });
+        send(check);
+        try {
+          await pipeline.wait(check.id);
+        } finally {
+          clearInterval(heartbeat);
+          unsubscribe();
+          if (!response.writableEnded && !response.destroyed) response.end();
+        }
+        return;
+      }
+      // JSON API callers also keep their invocation open until work is complete.
+      await pipeline.wait(check.id);
+      return response
+        .status(200)
+        .json({ id: check.id, check: publicCheck(pipeline.get(check.id)) });
+    }
+    response.status(check.cached ? 200 : 202).json({ id: check.id, check: publicCheck(check) });
   });
   app.get('/api/checks', async (request, response) => {
     if (!repository)
@@ -116,20 +164,28 @@ export function createApp({
       .max(10000)
       .safeParse(request.query.page || 1);
     if (!page.success) throw new AppError('Choose a valid history page.', 400, 'INVALID_PAGE');
-    response.json(await repository.history(page.data));
+    response.json({
+      ...(await repository.history(page.data, request.workspaceId)),
+      privateWorkspace: Boolean(request.workspaceId),
+    });
   });
-  app.get('/api/stats', async (_request, response) => {
+  app.get('/api/stats', async (request, response) => {
     if (!repository)
       throw new AppError('The history database is not configured.', 503, 'DATABASE_UNAVAILABLE');
-    response.json(await repository.stats());
+    response.json(await repository.stats(request.workspaceId));
   });
+  const findCheck = async (id, ownerId) => {
+    const local = pipeline.get(id);
+    if (local && (!ownerId || local.ownerId === ownerId)) return local;
+    return (await repository?.get(id, ownerId)) || (await jobStore?.get(id, ownerId));
+  };
   app.get('/api/checks/:id', async (request, response) => {
-    const check = pipeline.get(request.params.id) || (await repository?.get(request.params.id));
+    const check = await findCheck(request.params.id, request.workspaceId);
     if (!check) throw new AppError('This check could not be found.', 404, 'CHECK_NOT_FOUND');
-    response.json({ check });
+    response.json({ check: publicCheck(check) });
   });
   app.get('/api/checks/:id/stream', async (request, response) => {
-    const check = pipeline.get(request.params.id) || (await repository?.get(request.params.id));
+    const check = await findCheck(request.params.id, request.workspaceId);
     if (!check) throw new AppError('This check could not be found.', 404, 'CHECK_NOT_FOUND');
     response.status(200).set({
       'Content-Type': 'text/event-stream',
@@ -140,15 +196,33 @@ export function createApp({
     response.flushHeaders();
     const send = (snapshot) => {
       if (response.writableEnded || response.destroyed) return;
-      response.write(`event: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`);
+      response.write(`event: snapshot\ndata: ${JSON.stringify(publicCheck(snapshot))}\n\n`);
       if (['complete', 'failed'].includes(snapshot.status)) response.end();
     };
     const unsubscribe = pipeline.subscribe(check.id, send);
+    let polling = false;
+    const poll = jobStore
+      ? setInterval(async () => {
+          if (polling || response.writableEnded || response.destroyed) return;
+          polling = true;
+          try {
+            const latest =
+              (await repository?.get(check.id, request.workspaceId)) ||
+              (await jobStore.get(check.id, request.workspaceId));
+            if (latest) send(latest);
+          } catch {
+            if (!response.writableEnded && !response.destroyed) response.end();
+          } finally {
+            polling = false;
+          }
+        }, 2000)
+      : null;
     const heartbeat = setInterval(() => {
       if (!response.writableEnded) response.write(': keep-alive\n\n');
     }, 15000);
     response.on('close', () => {
       clearInterval(heartbeat);
+      if (poll) clearInterval(poll);
       unsubscribe();
     });
     send(check);
@@ -160,7 +234,7 @@ export function createApp({
         503,
         'DATABASE_UNAVAILABLE',
       );
-    const token = await repository.share(request.params.id);
+    const token = await repository.share(request.params.id, request.workspaceId);
     response.json({ path: `/#/shared/${token}` });
   });
   app.get('/api/shared/:token', async (request, response) => {
